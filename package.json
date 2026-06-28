@@ -1,19 +1,17 @@
 {
-  "name": "pdp-v06-human-first-newsroom",
-  "version": "0.6.0",
+  "name": "pdp-v07-insight-os",
+  "version": "0.7.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "type-check": "tsc --noEmit"
+    "lint": "next lint"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
     "@supabase/supabase-js": "^2.49.4",
     "next": "^15.3.3",
-    "openai": "^4.103.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

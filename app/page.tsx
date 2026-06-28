@@ -1,1239 +1,765 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
-import {
-  BUILTIN_DESKS,
-  WRITING_MODES,
-  TONES,
-  WORKFLOW_STAGES,
-  AUTHOR_VOICE_MODES,
-  LIBRARY_FOLDERS,
-  FORBIDDEN_TERMS,
-  DEFAULT_DNA_FORM,
-} from '@/lib/constants';
-import type {
-  Desk,
-  GenerationResult,
-  Post,
-  PromoCode,
-  AuthorVoiceMode,
-  WorkflowStatus,
-} from '@/types';
+import { useCallback, useEffect, useState } from 'react';
 
-// ── Types local to this component ────────────────────────────────────────────
-// Explicit event types — avoids implicit 'any' from JSX event handlers
-type InputEvent = { target: HTMLInputElement };
-type SelectEvent = { target: HTMLSelectElement };
-type TextAreaEvent = { target: HTMLTextAreaElement };
-type KeyEvent = { key: string };
-type Tab = 'studio' | 'library' | 'dna' | 'owner';
-type MessageType = 'info' | 'error' | 'success';
+type Tab = 'research' | 'radar';
+type Depth = 'quick' | 'standard' | 'deep';
+type ArticleMode = 'Facebook Article' | 'Long-form Essay' | 'Editorial' | 'Opinion' | 'Bilingual';
+type SectionKey = 'research_plan' | 'background' | 'timeline' | 'evidence_board' | 'fact_check' | 'multi_view' | 'thesis_options' | 'related_angles' | 'source_leads' | 'article';
 
-interface DNAForm {
-  phrases: string;
-  rhythm: string;
-  paragraphLength: 'short' | 'medium' | 'long' | 'mixed';
-  vocabulary: string;
-  emotionalStyle: string;
-  narrativeStyle: string;
-  languageMix: string;
-  avoidances: string;
+const DESKS = ['Sports', 'Politics & Society', 'Wellness', 'Travel', 'Sinology', 'Editorial', 'Technology', 'Culture'];
+const LANGUAGES = ['Vietnamese', 'English', 'Bilingual (VN + EN)'];
+const DEPTHS: { id: Depth; label: string; desc: string }[] = [
+  { id: 'quick',    label: 'Quick',    desc: '~30s' },
+  { id: 'standard', label: 'Standard', desc: '~45s' },
+  { id: 'deep',     label: 'Deep',     desc: '~60s' },
+];
+const ARTICLE_MODES: ArticleMode[] = ['Facebook Article', 'Long-form Essay', 'Editorial', 'Opinion', 'Bilingual'];
+const SECTIONS: { key: SectionKey; label: string }[] = [
+  { key: 'research_plan',  label: 'Research Plan' },
+  { key: 'background',     label: 'Background' },
+  { key: 'timeline',       label: 'Timeline' },
+  { key: 'evidence_board', label: 'Evidence Board' },
+  { key: 'fact_check',     label: 'Fact Check' },
+  { key: 'multi_view',     label: 'Multi-View' },
+  { key: 'thesis_options', label: 'Thesis Options' },
+  { key: 'source_leads',   label: 'Source Leads' },
+];
+
+function reliabilityClass(r: string) {
+  if (!r) return 'reliability-medium';
+  const l = r.toLowerCase();
+  if (l === 'high') return 'reliability-high';
+  if (l === 'low')  return 'reliability-low';
+  return 'reliability-medium';
 }
 
-interface LibraryFilter {
-  status: string;
-  desk: string;
-  folder: string;
-  search: string;
+function verdictBadgeClass(v: string) {
+  if (!v) return '';
+  const l = v.toLowerCase().replace(/\s+/g, '-');
+  if (l === 'verified') return 'badge-confirmed';
+  if (l === 'plausible') return 'badge-plausible';
+  if (l === 'contradicted') return 'badge-contradicted';
+  return 'badge-needs-source';
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function isBlocked(text: string): boolean {
-  const lower = text.toLowerCase();
-  return FORBIDDEN_TERMS.some((w) => lower.includes(w));
-}
-
-function getFingerprint(): string {
-  let fp = localStorage.getItem('pdp_fingerprint');
-  if (!fp) {
-    fp = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    localStorage.setItem('pdp_fingerprint', fp);
-  }
-  return fp;
-}
-
-// ── Component ─────────────────────────────────────────────────────────────────
 export default function Home() {
-  // ── Auth ──────────────────────────────────────────────────────────────────
-  const [email, setEmail] = useState('');
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [session, setSession] = useState<any>(null);
-
-  // ── API / billing ─────────────────────────────────────────────────────────
+  const [tab, setTab] = useState<Tab>('research');
   const [claudeKey, setClaudeKey] = useState('');
-  const [promoCode, setPromoCode] = useState('');
-  const [billingMode, setBillingMode] = useState<'own' | 'promo'>('own');
+  const [keyInput, setKeyInput] = useState('');
+  const [msg, setMsg] = useState('');
+  const [msgType, setMsgType] = useState<'error' | 'success' | 'info'>('info');
 
-  // ── Studio state ──────────────────────────────────────────────────────────
-  const [customDesks, setCustomDesks] = useState<Desk[]>([]);
-  const [deskId, setDeskId] = useState(BUILTIN_DESKS[0].id);
-  const [writingMode, setWritingMode] = useState<string>(WRITING_MODES[0]);
-  const [tone, setTone] = useState<string>(TONES[0]);
-  const [voiceMode, setVoiceMode] = useState<AuthorVoiceMode>('polished');
-  const [audience, setAudience] = useState('Vietnamese + international Facebook audience');
-  const [notes, setNotes] = useState('');
+  // Topic intake
+  const [topic, setTopic] = useState('');
+  const [desk, setDesk] = useState('Sports');
+  const [language, setLanguage] = useState('Vietnamese');
+  const [outputGoal, setOutputGoal] = useState('investigative article');
+  const [depth, setDepth] = useState<Depth>('standard');
+
+  // Research state
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<GenerationResult | null>(null);
-  const [postStatus, setPostStatus] = useState<WorkflowStatus>('draft');
-  const [newDeskName, setNewDeskName] = useState('');
-  const [newDeskDesc, setNewDeskDesc] = useState('');
+  const [streamPhase, setStreamPhase] = useState('');
+  const [sections, setSections] = useState<Partial<Record<SectionKey, any>>>({});
+  const [readySections, setReadySections] = useState<SectionKey[]>([]);
+  const [activeSection, setActiveSection] = useState<SectionKey>('research_plan');
 
-  // ── Writing DNA ───────────────────────────────────────────────────────────
-  const [dnaForm, setDnaForm] = useState<DNAForm>(DEFAULT_DNA_FORM);
+  // Thesis + article
+  const [selectedThesis, setSelectedThesis] = useState<number | null>(null);
+  const [articleMode, setArticleMode] = useState<ArticleMode>('Editorial');
+  const [article, setArticle] = useState<any>(null);
+  const [writingArticle, setWritingArticle] = useState(false);
 
-  // ── Library ───────────────────────────────────────────────────────────────
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [selectedPost, setSelectedPost] = useState<Post | null>(null);
-  const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>({
-    status: '',
-    desk: '',
-    folder: '',
-    search: '',
-  });
+  // Trending
+  const [trendDesk, setTrendDesk] = useState('Sports');
+  const [trends, setTrends] = useState<any[]>([]);
+  const [loadingTrends, setLoadingTrends] = useState(false);
 
-  // ── Owner panel ───────────────────────────────────────────────────────────
-  const [ownerSecret, setOwnerSecret] = useState('');
-  const [promoPlan, setPromoPlan] = useState('Starter Promo');
-  const [promoLimit, setPromoLimit] = useState(20);
-  const [promoUsers, setPromoUsers] = useState(1);
-  const [promoExpires, setPromoExpires] = useState('');
-  const [createdPromo, setCreatedPromo] = useState<PromoCode | null>(null);
-  const [promoList, setPromoList] = useState<PromoCode[]>([]);
-
-  // ── UI ────────────────────────────────────────────────────────────────────
-  const [tab, setTab] = useState<Tab>('studio');
-  const [message, setMessage] = useState('');
-  const [messageType, setMessageType] = useState<MessageType>('info');
-
-  // ── Derived ───────────────────────────────────────────────────────────────
-  const allDesks = useMemo(() => [...BUILTIN_DESKS, ...customDesks], [customDesks]);
-  const activeDesk = useMemo(
-    () => allDesks.find((d) => d.id === deskId) ?? BUILTIN_DESKS[0],
-    [allDesks, deskId]
-  );
-
-  const filteredPosts = useMemo(() => {
-    return posts.filter((p) => {
-      if (libraryFilter.status && p.status !== libraryFilter.status) return false;
-      if (libraryFilter.desk && p.desk !== libraryFilter.desk) return false;
-      if (libraryFilter.folder && p.folder !== libraryFilter.folder) return false;
-      if (libraryFilter.search) {
-        const q = libraryFilter.search.toLowerCase();
-        if (!p.title.toLowerCase().includes(q) && !(p.source_notes ?? '').toLowerCase().includes(q)) {
-          return false;
-        }
-      }
-      return true;
-    });
-  }, [posts, libraryFilter]);
-
-  // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
-    setClaudeKey(localStorage.getItem('pdp_claude_key') ?? '');
-    setPromoCode(localStorage.getItem('pdp_promo_code') ?? '');
-
-    try {
-      const savedDNA = localStorage.getItem('pdp_dna');
-      if (savedDNA) setDnaForm(JSON.parse(savedDNA));
-    } catch {}
-
-    try {
-      const savedDesks = localStorage.getItem('pdp_custom_desks');
-      if (savedDesks) setCustomDesks(JSON.parse(savedDesks));
-    } catch {}
-
-    if (!isSupabaseConfigured) return;
-
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) setSession(data.session);
-    });
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
-      setSession(sess);
-    });
-
-    return () => sub.subscription.unsubscribe();
+    const saved = localStorage.getItem('pdp_claude_key');
+    if (saved) setClaudeKey(saved);
   }, []);
 
-  useEffect(() => {
-    if (session?.user) loadPosts();
-  }, [session]);
-
-  // ── Notifications ──────────────────────────────────────────────────────────
-  function notify(msg: string, type: MessageType = 'info') {
-    setMessage(msg);
-    setMessageType(type);
-    if (type !== 'error') {
-      setTimeout(() => setMessage(''), 5000);
-    }
+  function notify(m: string, t: 'error' | 'success' | 'info' = 'info') {
+    setMsg(m); setMsgType(t);
+    if (t !== 'error') setTimeout(() => setMsg(''), 5000);
   }
 
-  // ── Auth ──────────────────────────────────────────────────────────────────
-  async function sendMagicLink() {
-    if (!isSupabaseConfigured) {
-      return notify('Supabase not configured. Add env vars first.', 'error');
-    }
-    const { error } = await supabase.auth.signInWithOtp({ email });
-    notify(error ? error.message : 'Check your email for the login link.', error ? 'error' : 'success');
+  function saveKey() {
+    const k = keyInput.trim();
+    if (!k.startsWith('sk-ant-')) return notify('Invalid key — must start with sk-ant-', 'error');
+    localStorage.setItem('pdp_claude_key', k);
+    setClaudeKey(k);
+    setKeyInput('');
+    notify('API key saved.', 'success');
   }
 
-  async function signOut() {
-    await supabase.auth.signOut();
-    setSession(null);
-    setPosts([]);
-    setSelectedPost(null);
-  }
-
-  // ── API key management ────────────────────────────────────────────────────
-  function saveClaudeKey() {
-    localStorage.setItem('pdp_claude_key', claudeKey.trim());
-    notify('Anthropic API key saved on this browser only.', 'success');
-  }
-
-  function clearClaudeKey() {
+  function clearKey() {
     localStorage.removeItem('pdp_claude_key');
     setClaudeKey('');
-    notify('API key removed.', 'info');
   }
 
-  function savePromo() {
-    localStorage.setItem('pdp_promo_code', promoCode.trim().toUpperCase());
-    notify('Promo code saved. Generations use owner credits until quota or expiry.', 'success');
-  }
-
-  // ── Writing DNA ───────────────────────────────────────────────────────────
-  function saveDNA() {
-    localStorage.setItem('pdp_dna', JSON.stringify(dnaForm));
-    // Also sync to server if logged in
-    if (session?.user) {
-      // Sync to server with JWT auth — get the access token from the current session
-      supabase.auth.getSession().then(({ data: sessionData }) => {
-        const token = sessionData.session?.access_token;
-        if (!token) return;
-        fetch('/api/writing-dna', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            dna: {
-              phrases: dnaForm.phrases.split(',').map((s) => s.trim()).filter(Boolean),
-              rhythm: dnaForm.rhythm,
-              paragraphLength: dnaForm.paragraphLength,
-              vocabulary: dnaForm.vocabulary.split(',').map((s) => s.trim()).filter(Boolean),
-              emotionalStyle: dnaForm.emotionalStyle,
-              narrativeStyle: dnaForm.narrativeStyle,
-              languageMix: dnaForm.languageMix,
-              avoidances: dnaForm.avoidances.split(',').map((s) => s.trim()).filter(Boolean),
-            },
-          }),
-        }).catch(console.error);
-      });
-    }
-    notify('Writing DNA saved. Your voice profile will be used in all generations.', 'success');
-  }
-
-  // Two typed updaters to satisfy strict TS (paragraphLength is a union, not plain string)
-  function updateDNAString(key: Exclude<keyof DNAForm, 'paragraphLength'>, value: string) {
-    setDnaForm((prev) => ({ ...prev, [key]: value }));
-  }
-  function updateDNAParagraphLength(value: DNAForm['paragraphLength']) {
-    setDnaForm((prev) => ({ ...prev, paragraphLength: value }));
-  }
-
-  // ── Custom desks ──────────────────────────────────────────────────────────
-  function addCustomDesk() {
-    if (!newDeskName.trim()) return notify('Enter a desk name.', 'error');
-    const id = newDeskName
-      .toLowerCase()
-      .replace(/\s+/g, '-')
-      .replace(/[^a-z0-9-]/g, '');
-    if (allDesks.find((d) => d.id === id)) return notify('A desk with that name already exists.', 'error');
-    const updated: Desk[] = [
-      ...customDesks,
-      { id, name: newDeskName.trim(), icon: '◆', desc: newDeskDesc.trim(), isBuiltin: false },
-    ];
-    setCustomDesks(updated);
-    localStorage.setItem('pdp_custom_desks', JSON.stringify(updated));
-    setNewDeskName('');
-    setNewDeskDesc('');
-    notify(`Desk "${newDeskName.trim()}" created.`, 'success');
-  }
-
-  function removeCustomDesk(id: string) {
-    const updated = customDesks.filter((d) => d.id !== id);
-    setCustomDesks(updated);
-    localStorage.setItem('pdp_custom_desks', JSON.stringify(updated));
-    if (deskId === id) setDeskId(BUILTIN_DESKS[0].id);
-  }
-
-  // ── Library ───────────────────────────────────────────────────────────────
-  const loadPosts = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('posts')
-      .select('*')
-      .order('updated_at', { ascending: false })
-      .limit(150);
-    if (!error) setPosts((data as unknown as Post[]) ?? []);
-  }, []); // supabase client is stable
-
-  async function toggleFavorite(post: Post) {
-    await supabase.from('posts').update({ is_favorite: !post.is_favorite }).eq('id', post.id);
-    loadPosts();
-    if (selectedPost?.id === post.id) {
-      setSelectedPost({ ...selectedPost, is_favorite: !post.is_favorite });
-    }
-  }
-
-  async function updatePostStatus(id: string, newStatus: WorkflowStatus) {
-    await supabase.from('posts').update({ status: newStatus }).eq('id', id);
-    loadPosts();
-    if (selectedPost?.id === id) {
-      setSelectedPost((p) => p ? { ...p, status: newStatus } : null);
-    }
-  }
-
-  async function deletePost(id: string) {
-    if (!confirm('Delete this draft permanently?')) return;
-    await supabase.from('posts').delete().eq('id', id);
-    if (selectedPost?.id === id) setSelectedPost(null);
-    loadPosts();
-    notify('Draft deleted.', 'info');
-  }
-
-  async function savePost() {
-    if (!result) return;
-    if (!session?.user) return notify('Log in to save to your library.', 'error');
-
-    const { error } = await supabase.from('posts').insert({
-      user_id: session.user.id,
-      title: result.title || 'Untitled',
-      desk: activeDesk.name,
-      status: postStatus,
-      writing_mode: voiceMode,
-      source_notes: notes,
-      vietnamese: result.vietnamese ?? '',
-      english: result.english ?? '',
-      captions: JSON.stringify(result.captions ?? []),
-      social_pack: result.social_pack ?? {},
-      score: result.editorial_score ?? {},
-      ai_voice_warnings: result.ai_voice_warnings ?? [],
-      fact_check_notes: result.fact_check_notes ?? [],
-      publish_notes: result.publish_notes ?? '',
-      folder: 'Inbox',
-      tags: [],
-      is_favorite: false,
-    });
-
-    if (error) notify(error.message, 'error');
-    else {
-      notify('Saved to your private library.', 'success');
-      loadPosts();
-    }
-  }
-
-  // ── Generate ──────────────────────────────────────────────────────────────
-  async function generate() {
-    setMessage('');
-    setResult(null);
-
-    if (isBlocked(`${deskId} ${notes}`)) {
-      return notify('Topic blocked by your public-content rules.', 'error');
-    }
-    if (billingMode === 'own' && !claudeKey.trim()) {
-      return notify('Add your Anthropic API key or switch to a promo code.', 'error');
-    }
-    if (billingMode === 'promo' && !promoCode.trim()) {
-      return notify('Enter an owner promo code first.', 'error');
-    }
-    if (!notes.trim()) {
-      return notify('Add your raw notes or pitch before generating.', 'error');
-    }
+  // ── Deep Research ──────────────────────────────────────────────────────────
+  const runResearch = useCallback(async () => {
+    if (!topic.trim()) return notify('Enter a topic first.', 'error');
+    if (!claudeKey) return notify('Add your Anthropic API key above.', 'error');
 
     setLoading(true);
+    setSections({});
+    setReadySections([]);
+    setArticle(null);
+    setSelectedThesis(null);
+    setStreamPhase('Connecting to research engine...');
+
     try {
-      const res = await fetch('/api/generate', {
+      const res = await fetch('/api/research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'research', topic, desk, language, outputGoal, depth, claudeKey }),
+      });
+
+      if (!res.ok || !res.body) {
+        const err = await res.json().catch(() => ({ error: 'Request failed' }));
+        throw new Error(err.error || 'Research failed');
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim();
+          if (payload === '[DONE]') break;
+
+          try {
+            const event = JSON.parse(payload);
+            if (event.type === 'status' || event.type === 'progress') {
+              setStreamPhase(event.message || `Generating... ${event.pct || 0}%`);
+            } else if (event.type === 'section') {
+              const key = event.section as SectionKey;
+              setSections(prev => ({ ...prev, [key]: event.data }));
+              setReadySections(prev => prev.includes(key) ? prev : [...prev, key]);
+              setActiveSection(key);
+              setStreamPhase(`${key.replace(/_/g, ' ')} ready`);
+            } else if (event.type === 'done') {
+              setStreamPhase('Research complete.');
+            } else if (event.type === 'error') {
+              throw new Error(event.message);
+            }
+          } catch (parseErr) {
+            // skip malformed line
+          }
+        }
+      }
+    } catch (err: any) {
+      notify(err.message || 'Research failed.', 'error');
+    } finally {
+      setLoading(false);
+      setStreamPhase('');
+    }
+  }, [topic, desk, language, outputGoal, depth, claudeKey]);
+
+  // ── Write Article ──────────────────────────────────────────────────────────
+  async function writeArticle() {
+    if (selectedThesis === null) return notify('Select a thesis first.', 'error');
+    if (!claudeKey) return notify('Add your Anthropic API key.', 'error');
+
+    const thesis = sections.thesis_options?.[selectedThesis];
+    if (!thesis) return notify('Thesis not found.', 'error');
+
+    setWritingArticle(true);
+    setArticle(null);
+
+    const evidenceSummary = JSON.stringify({
+      confirmed: sections.evidence_board?.confirmed_facts?.slice(0, 5) || [],
+      stats: sections.evidence_board?.statistics?.slice(0, 4) || [],
+      quotes: sections.evidence_board?.expert_quotes?.slice(0, 3) || [],
+    });
+
+    try {
+      const res = await fetch('/api/research', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          desk: activeDesk.name,
-          mode: writingMode,
-          tone,
-          audience,
-          notes,
-          writingMode: voiceMode,
-          writingDNA: {
-            phrases: dnaForm.phrases.split(',').map((s) => s.trim()).filter(Boolean),
-            rhythm: dnaForm.rhythm,
-            paragraphLength: dnaForm.paragraphLength,
-            vocabulary: dnaForm.vocabulary.split(',').map((s) => s.trim()).filter(Boolean),
-            emotionalStyle: dnaForm.emotionalStyle,
-            narrativeStyle: dnaForm.narrativeStyle,
-            languageMix: dnaForm.languageMix,
-            avoidances: dnaForm.avoidances.split(',').map((s) => s.trim()).filter(Boolean),
-          },
-          userClaudeKey: billingMode === 'own' ? claudeKey.trim() : '',
-          promoCode: billingMode === 'promo' ? promoCode.trim().toUpperCase() : '',
-          userId: session?.user?.id,
-          userFingerprint: getFingerprint(),
+          mode: 'article',
+          topic,
+          thesis: thesis.core_argument,
+          evidenceBoard: evidenceSummary,
+          articleMode,
+          language,
+          claudeKey,
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Generation failed');
+      if (!res.ok || !res.body) throw new Error('Article generation failed');
 
-      setResult(data as GenerationResult);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
 
-      const engine = data.billing?.engine ?? 'claude-sonnet-4-6';
-      const promoNote =
-        data.billing?.mode === 'owner_promo'
-          ? ` · Promo remaining: ${data.billing?.promo_remaining_generations}`
-          : '';
-      notify(`Draft generated. Engine: ${engine}${promoNote}`, 'success');
-    } catch (err: unknown) {
-      notify(err instanceof Error ? err.message : 'Generation failed.', 'error');
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim();
+          if (payload === '[DONE]') break;
+          try {
+            const event = JSON.parse(payload);
+            if (event.type === 'article') { setArticle(event.data); setActiveSection('article'); }
+            if (event.type === 'error') throw new Error(event.message);
+          } catch {}
+        }
+      }
+    } catch (err: any) {
+      notify(err.message || 'Article generation failed.', 'error');
     } finally {
-      setLoading(false);
+      setWritingArticle(false);
     }
   }
 
-  function copyText(text: string, label = '') {
-    navigator.clipboard.writeText(text ?? '');
-    notify(`${label ? label + ' ' : ''}Copied.`, 'info');
-  }
-
-  // ── Owner panel ───────────────────────────────────────────────────────────
-  async function createPromo() {
-    setCreatedPromo(null);
+  // ── Trending ───────────────────────────────────────────────────────────────
+  async function fetchTrends() {
+    if (!claudeKey) return notify('Add your Anthropic API key.', 'error');
+    setLoadingTrends(true);
+    setTrends([]);
     try {
-      const res = await fetch('/api/promo/create', {
+      const res = await fetch('/api/trending', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-owner-secret': ownerSecret },
-        body: JSON.stringify({
-          plan_name: promoPlan,
-          max_generations: promoLimit,
-          max_users: promoUsers,
-          expires_at: promoExpires ? new Date(promoExpires).toISOString() : null,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ desk: trendDesk, claudeKey }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to create promo');
-      setCreatedPromo(data.promo as PromoCode);
-      notify(`Promo created: ${data.promo.code}`, 'success');
-      loadPromos();
-    } catch (err: unknown) {
-      notify(err instanceof Error ? err.message : 'Failed to create promo', 'error');
+      if (!res.ok) throw new Error(data.error || 'Trending failed');
+      setTrends(data.trends || []);
+    } catch (err: any) {
+      notify(err.message, 'error');
+    } finally {
+      setLoadingTrends(false);
     }
   }
 
-  async function loadPromos() {
-    try {
-      const res = await fetch('/api/promo/list', {
-        headers: { 'x-owner-secret': ownerSecret },
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to load promos');
-      setPromoList(data.promos as PromoCode[]);
-    } catch (err: unknown) {
-      notify(err instanceof Error ? err.message : 'Failed to load promos', 'error');
-    }
+  function loadTrendTopic(trend: any) {
+    setTopic(trend.title);
+    setDesk(trendDesk);
+    setOutputGoal('investigative article');
+    setTab('research');
+    notify(`Topic loaded: ${trend.title}`, 'success');
   }
 
-  async function togglePromo(code: string, isActive: boolean) {
-    try {
-      const res = await fetch('/api/promo/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-owner-secret': ownerSecret },
-        body: JSON.stringify({ code, is_active: !isActive }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to update promo');
-      notify(`${code} ${!isActive ? 'activated' : 'paused'}.`, 'success');
-      loadPromos();
-    } catch (err: unknown) {
-      notify(err instanceof Error ? err.message : 'Failed to update promo', 'error');
-    }
+  function copyText(text: string) {
+    navigator.clipboard.writeText(text || '');
+    notify('Copied.', 'info');
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // RENDER
-  // ═══════════════════════════════════════════════════════════════════════════
+  const hasResearch = readySections.length > 0;
+
+  // ─── Render ─────────────────────────────────────────────────────────────────
   return (
-    <main>
-      {/* ── HEADER ──────────────────────────────────────────────────────── */}
-      <header className="pdp-header">
-        <div className="pdp-header-left">
-          <div className="pdp-logo">
-            <span className="pdp-logo-mark">P</span>
+    <>
+      {/* HEADER */}
+      <header className="header">
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div className="logo">
+            <span className="logo-mark">P</span>
             <div>
-              <span className="pdp-logo-name">Phong Daily Press</span>
-              <span className="pdp-logo-version">v0.6 · Human-First AI Newsroom</span>
+              <span className="logo-name">Phong Daily Press</span>
+              <span className="logo-version">Insight OS · v0.7</span>
             </div>
           </div>
-          <nav className="pdp-nav">
-            {(
-              [
-                { id: 'studio', label: '◈ Studio' },
-                { id: 'library', label: '◎ Library' },
-                { id: 'dna', label: '◆ Writing DNA' },
-                { id: 'owner', label: '⚙ Owner' },
-              ] as { id: Tab; label: string }[]
-            ).map(({ id, label }) => (
-              <button
-                key={id}
-                className={`nav-btn${tab === id ? ' active' : ''}`}
-                onClick={() => setTab(id)}
-              >
-                {label}
-              </button>
-            ))}
+          <nav className="nav">
+            <button className={`nav-btn${tab === 'research' ? ' active' : ''}`} onClick={() => setTab('research')}>◈ Research</button>
+            <button className={`nav-btn${tab === 'radar' ? ' active' : ''}`} onClick={() => setTab('radar')}>◉ Trending Radar</button>
           </nav>
         </div>
-        <div className="pdp-header-right">
-          {session?.user ? (
-            <div className="auth-info">
-              <span className="auth-email">{session.user.email}</span>
-              <button className="btn-ghost" onClick={signOut}>
-                Sign out
-              </button>
-            </div>
+        <div className="header-right">
+          {claudeKey ? (
+            <>
+              <span className="api-status api-ok">API ✓</span>
+              <button className="btn-sm" onClick={clearKey}>Remove key</button>
+            </>
           ) : (
-            <div className="auth-row">
-              <input
-                className="auth-input"
-                placeholder="your@email.com"
-                type="email"
-                value={email}
-                onChange={(e: any) => setEmail(e.target.value)}
-                onKeyDown={(e: any) => e.key === 'Enter' && sendMagicLink()}
-              />
-              <button className="btn-ghost" onClick={sendMagicLink}>
-                Magic link
-              </button>
-            </div>
+            <>
+              <input className="key-input" type="password" placeholder="sk-ant-... API key" value={keyInput} onChange={(e: any) => setKeyInput(e.target.value)} onKeyDown={(e: any) => e.key === 'Enter' && saveKey()} />
+              <button className="btn-sm" onClick={saveKey}>Save key</button>
+            </>
           )}
         </div>
       </header>
 
-      {/* ── NOTIFICATION BANNER ─────────────────────────────────────────── */}
-      {message && (
-        <div className={`banner banner-${messageType}`} onClick={() => setMessage('')}>
-          {message}
+      {msg && (
+        <div className={`banner banner-${msgType}`} style={{ margin: '12px 24px 0' }} onClick={() => setMsg('')}>
+          {msg}
         </div>
       )}
 
-      {/* ════════════════════════════════════════════════════════════════════
-          STUDIO TAB
-      ════════════════════════════════════════════════════════════════════ */}
-      {tab === 'studio' && (
-        <div className="studio-layout">
-          {/* ── Left controls ─────────────────────────────────────────── */}
-          <div className="studio-left">
-            {/* Billing */}
-            <section className="panel">
-              <h2 className="panel-title">API Access</h2>
-              <div className="billing-toggle">
-                <button
-                  className={`toggle-btn${billingMode === 'own' ? ' active' : ''}`}
-                  onClick={() => setBillingMode('own')}
-                >
-                  My Anthropic key
-                </button>
-                <button
-                  className={`toggle-btn${billingMode === 'promo' ? ' active' : ''}`}
-                  onClick={() => setBillingMode('promo')}
-                >
-                  Promo code
-                </button>
-              </div>
+      <div className="main">
 
-              {billingMode === 'own' ? (
-                <>
-                  <label>Anthropic API Key</label>
-                  <input
-                    type="password"
-                    placeholder="sk-ant-..."
-                    value={claudeKey}
-                    onChange={(e: any) => setClaudeKey(e.target.value)}
-                  />
-                  <div className="btn-row">
-                    <button onClick={saveClaudeKey}>Save on this browser</button>
-                    <button onClick={clearClaudeKey}>Remove</button>
-                  </div>
-                  <p className="hint">Key stored in localStorage — stays on your device only.</p>
-                </>
-              ) : (
-                <>
-                  <label>Promo Code</label>
-                  <input
-                    placeholder="PDP-ABC123"
-                    value={promoCode}
-                    onChange={(e: any) => setPromoCode(e.target.value.toUpperCase())}
-                  />
-                  <div className="btn-row">
-                    <button onClick={savePromo}>Save promo</button>
-                  </div>
-                </>
-              )}
-            </section>
+        {/* ══ RESEARCH TAB ══════════════════════════════════════════════════ */}
+        {tab === 'research' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 16, alignItems: 'start' }}>
 
-            {/* Author Voice Mode */}
-            <section className="panel">
-              <h2 className="panel-title">Author Voice Mode</h2>
-              <div className="voice-mode-grid">
-                {AUTHOR_VOICE_MODES.map((vm) => (
-                  <button
-                    key={vm.id}
-                    className={`voice-btn${voiceMode === vm.id ? ' active' : ''}`}
-                    onClick={() => setVoiceMode(vm.id)}
-                  >
-                    <span className="voice-label">{vm.label}</span>
-                    <span className="voice-desc">{vm.desc}</span>
-                  </button>
-                ))}
-              </div>
-              <p className="hint anti-ai-note">
-                ◉ Anti-AI filter active — clichés, corporate language, and motivational filler are
-                automatically flagged and removed.
-              </p>
-            </section>
+            {/* Left: Topic Intake */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div className="panel">
+                <div className="panel-title">Topic Intake</div>
 
-            {/* Desk selector */}
-            <section className="panel">
-              <h2 className="panel-title">Desk</h2>
-              <div className="desk-grid">
-                {allDesks.map((d) => (
-                  <button
-                    key={d.id}
-                    className={`desk-btn${deskId === d.id ? ' active' : ''}`}
-                    onClick={() => setDeskId(d.id)}
-                  >
-                    <span className="desk-icon">{d.icon}</span>
-                    <span className="desk-name">{d.name}</span>
-                    <span className="desk-desc">{d.desc}</span>
-                    {!d.isBuiltin && (
-                      <span
-                        className="desk-remove"
-                        onClick={(e: { stopPropagation(): void }) => {
-                          e.stopPropagation();
-                          removeCustomDesk(d.id);
-                        }}
-                        title="Remove desk"
-                      >
-                        ×
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-              <div className="custom-desk">
-                <label>Add custom desk</label>
-                <div className="custom-desk-row">
-                  <input
-                    placeholder="Desk name"
-                    value={newDeskName}
-                    onChange={(e: any) => setNewDeskName(e.target.value)}
-                    onKeyDown={(e: any) => e.key === 'Enter' && addCustomDesk()}
-                  />
-                  <input
-                    placeholder="Short description"
-                    value={newDeskDesc}
-                    onChange={(e: any) => setNewDeskDesc(e.target.value)}
-                  />
-                  <button onClick={addCustomDesk}>+ Add</button>
-                </div>
-              </div>
-            </section>
+                <label>Topic</label>
+                <textarea
+                  value={topic}
+                  onChange={(e: any) => setTopic(e.target.value)}
+                  placeholder="What do you want to investigate? Be specific."
+                  style={{ minHeight: 80 }}
+                />
 
-            {/* Production settings */}
-            <section className="panel">
-              <h2 className="panel-title">Production Settings</h2>
-              <div className="two-col">
-                <div>
-                  <label>Writing Mode</label>
-                  <select value={writingMode} onChange={(e: any) => setWritingMode(e.target.value)}>
-                    {WRITING_MODES.map((m) => (
-                      <option key={m}>{m}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label>Tone</label>
-                  <select value={tone} onChange={(e: any) => setTone(e.target.value)}>
-                    {TONES.map((t) => (
-                      <option key={t}>{t}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <label>Audience</label>
-              <input value={audience} onChange={(e: any) => setAudience(e.target.value)} />
-              <label>Pitch / Raw Notes / Reporter Material</label>
-              <textarea
-                value={notes}
-                onChange={(e: any) => setNotes(e.target.value)}
-                placeholder={`Paste your story idea, raw notes, travel memory, interview fragments, Sinology entry, or anything for the ${activeDesk.name}...`}
-              />
-              <button className="btn-primary" onClick={generate} disabled={loading}>
-                {loading ? 'Writing...' : `Generate · ${activeDesk.name}`}
-              </button>
-            </section>
-          </div>
-
-          {/* ── Right: Output ──────────────────────────────────────────── */}
-          <div className="studio-right">
-            <section className="panel output-panel">
-              <div className="output-header">
-                <h2 className="panel-title">Output</h2>
-                {result && (
-                  <div className="output-actions">
-                    <select
-                      value={postStatus}
-                      onChange={(e: any) => setPostStatus(e.target.value as WorkflowStatus)}
-                    >
-                      {WORKFLOW_STAGES.map((s) => (
-                        <option key={s}>{s}</option>
-                      ))}
+                <div className="intake-grid">
+                  <div>
+                    <label>Desk</label>
+                    <select value={desk} onChange={(e: any) => setDesk(e.target.value)}>
+                      {DESKS.map(d => <option key={d}>{d}</option>)}
                     </select>
-                    <button className="btn-save" onClick={savePost}>
-                      Save to Library
-                    </button>
                   </div>
-                )}
-              </div>
-
-              {!result ? (
-                <div className="output-empty">
-                  <span className="output-empty-icon">◈</span>
-                  <p>Generated package appears here.</p>
-                  <p className="hint">
-                    Powered by Claude Sonnet 4.6 · Reads your Writing DNA profile.
-                  </p>
-                </div>
-              ) : (
-                <div className="output-body">
-                  <div className="output-title">{result.title}</div>
-
-                  {/* Headlines */}
-                  <div className="output-section">
-                    <div className="section-label">Headlines — click to copy</div>
-                    <ol className="headline-list">
-                      {(result.headlines ?? []).map((h, i) => (
-                        <li key={i} className="headline-item" onClick={() => copyText(h, 'Headline')}>
-                          {h}
-                        </li>
-                      ))}
-                    </ol>
-                  </div>
-
-                  {/* Anti-AI filter log */}
-                  {(result.ai_voice_warnings ?? []).length > 0 && (
-                    <div className="output-section filter-log">
-                      <div className="section-label">◉ Anti-AI Filter Log</div>
-                      <ul>
-                        {result.ai_voice_warnings.map((w, i) => (
-                          <li key={i}>{w}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Vietnamese */}
-                  <div className="output-section">
-                    <div className="section-label-row">
-                      <span className="section-label">Vietnamese Edition</span>
-                      <button className="btn-copy" onClick={() => copyText(result.vietnamese, 'VN')}>
-                        Copy
-                      </button>
-                    </div>
-                    <div className="article-body">{result.vietnamese}</div>
-                  </div>
-
-                  {/* English */}
-                  <div className="output-section">
-                    <div className="section-label-row">
-                      <span className="section-label">English Edition</span>
-                      <button className="btn-copy" onClick={() => copyText(result.english, 'EN')}>
-                        Copy
-                      </button>
-                    </div>
-                    <div className="article-body">{result.english}</div>
-                  </div>
-
-                  {/* Social pack */}
-                  {result.social_pack && (
-                    <div className="output-section">
-                      <div className="section-label">Social Pack</div>
-                      <div className="social-grid">
-                        {Object.entries(result.social_pack).map(([k, v]) => (
-                          <div key={k} className="social-card">
-                            <div className="social-key">{k.replace(/_/g, ' ')}</div>
-                            <div className="social-value">{v}</div>
-                            <button className="btn-copy-sm" onClick={() => copyText(v)}>
-                              Copy
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Opening hooks */}
-                  {(result.hooks ?? []).length > 0 && (
-                    <div className="output-section">
-                      <div className="section-label">Opening Hooks — click to copy</div>
-                      {result.hooks.map((h, i) => (
-                        <div key={i} className="hook-item" onClick={() => copyText(h, 'Hook')}>
-                          {h}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Hashtags */}
-                  {(result.hashtags ?? []).length > 0 && (
-                    <div className="output-section">
-                      <div className="section-label">Hashtags</div>
-                      <div className="hashtag-row">
-                        {result.hashtags.map((h, i) => (
-                          <span key={i} className="hashtag" onClick={() => copyText(h)}>
-                            {h}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Editorial score */}
-                  {result.editorial_score && (
-                    <div className="output-section">
-                      <div className="section-label">Editorial Score</div>
-                      <div className="score-grid">
-                        {Object.entries(result.editorial_score).map(([k, v]) => (
-                          <div key={k} className="score-card">
-                            <div className="score-key">{k.replace(/_/g, ' ')}</div>
-                            <div className="score-val">{v}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Fact check */}
-                  {(result.fact_check_notes ?? []).length > 0 && (
-                    <div className="output-section fact-check">
-                      <div className="section-label">Fact Check Notes</div>
-                      <ul>
-                        {result.fact_check_notes.map((n, i) => (
-                          <li key={i}>{n}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Publish notes */}
-                  {result.publish_notes && (
-                    <div className="output-section">
-                      <div className="section-label">Publish Notes</div>
-                      <p className="publish-notes">{result.publish_notes}</p>
-                    </div>
-                  )}
-                </div>
-              )}
-            </section>
-          </div>
-        </div>
-      )}
-
-      {/* ════════════════════════════════════════════════════════════════════
-          LIBRARY TAB
-      ════════════════════════════════════════════════════════════════════ */}
-      {tab === 'library' && (
-        <div className="library-layout">
-          <div className="library-sidebar panel">
-            <h2 className="panel-title">Library</h2>
-            {!session?.user && (
-              <p className="hint">Log in to access your private article library.</p>
-            )}
-
-            <label>Search</label>
-            <input
-              placeholder="Title or notes..."
-              value={libraryFilter.search}
-              onChange={(e: any) => setLibraryFilter((p) => ({ ...p, search: e.target.value }))}
-            />
-
-            <label>Status</label>
-            <select
-              value={libraryFilter.status}
-              onChange={(e: any) => setLibraryFilter((p) => ({ ...p, status: e.target.value }))}
-            >
-              <option value="">All statuses</option>
-              {WORKFLOW_STAGES.map((s) => (
-                <option key={s}>{s}</option>
-              ))}
-            </select>
-
-            <label>Desk</label>
-            <select
-              value={libraryFilter.desk}
-              onChange={(e: any) => setLibraryFilter((p) => ({ ...p, desk: e.target.value }))}
-            >
-              <option value="">All desks</option>
-              {allDesks.map((d) => (
-                <option key={d.id} value={d.name}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
-
-            <label>Folder</label>
-            <select
-              value={libraryFilter.folder}
-              onChange={(e: any) => setLibraryFilter((p) => ({ ...p, folder: e.target.value }))}
-            >
-              <option value="">All folders</option>
-              {LIBRARY_FOLDERS.map((f) => (
-                <option key={f}>{f}</option>
-              ))}
-            </select>
-
-            <div className="library-count">{filteredPosts.length} articles</div>
-          </div>
-
-          <div className="library-main">
-            {filteredPosts.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-icon">◎</span>
-                <p>
-                  {posts.length === 0
-                    ? 'No saved articles yet. Generate something in the Studio.'
-                    : 'No articles match your filters.'}
-                </p>
-              </div>
-            ) : (
-              <div className="post-grid">
-                {filteredPosts.map((p) => (
-                  <div
-                    key={p.id}
-                    className={`post-card${selectedPost?.id === p.id ? ' selected' : ''}`}
-                    onClick={() => setSelectedPost(selectedPost?.id === p.id ? null : p)}
-                  >
-                    <div className="post-card-top">
-                      <span className={`status-badge status-${p.status}`}>{p.status}</span>
-                      <button
-                        className={`fav-btn${p.is_favorite ? ' active' : ''}`}
-                        onClick={(e: { stopPropagation(): void }) => {
-                          e.stopPropagation();
-                          toggleFavorite(p);
-                        }}
-                        title="Toggle favorite"
-                      >
-                        ★
-                      </button>
-                    </div>
-                    <h3 className="post-card-title">{p.title}</h3>
-                    <div className="post-card-meta">
-                      {p.desk} · {p.writing_mode}
-                    </div>
-                    <div className="post-card-date">
-                      {new Date(p.updated_at).toLocaleDateString()}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {selectedPost && (
-              <div className="post-detail">
-                <div className="post-detail-header">
                   <div>
-                    <h2>{selectedPost.title}</h2>
-                    <div className="post-detail-meta">
-                      {selectedPost.desk} · {selectedPost.status} ·{' '}
-                      {new Date(selectedPost.updated_at).toLocaleString()}
-                    </div>
-                  </div>
-                  <div className="post-detail-actions">
-                    <select
-                      value={selectedPost.status}
-                      onChange={(e: any) =>
-                        updatePostStatus(selectedPost.id, e.target.value as WorkflowStatus)
-                      }
-                    >
-                      {WORKFLOW_STAGES.map((s) => (
-                        <option key={s}>{s}</option>
-                      ))}
+                    <label>Language</label>
+                    <select value={language} onChange={(e: any) => setLanguage(e.target.value)}>
+                      {LANGUAGES.map(l => <option key={l}>{l}</option>)}
                     </select>
-                    <button onClick={() => copyText(selectedPost.vietnamese, 'Vietnamese')}>
-                      Copy VN
-                    </button>
-                    <button onClick={() => copyText(selectedPost.english, 'English')}>
-                      Copy EN
-                    </button>
-                    <button
-                      className="btn-danger"
-                      onClick={() => deletePost(selectedPost.id)}
-                    >
-                      Delete
-                    </button>
                   </div>
                 </div>
-                <div className="post-detail-body">
-                  <h4>Vietnamese</h4>
-                  <div className="article-body">{selectedPost.vietnamese}</div>
-                  <h4>English</h4>
-                  <div className="article-body">{selectedPost.english}</div>
-                  {selectedPost.publish_notes && (
-                    <>
-                      <h4>Publish Notes</h4>
-                      <p className="publish-notes">{selectedPost.publish_notes}</p>
-                    </>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
-      {/* ════════════════════════════════════════════════════════════════════
-          WRITING DNA TAB
-      ════════════════════════════════════════════════════════════════════ */}
-      {tab === 'dna' && (
-        <div className="dna-layout">
-          <div className="panel dna-panel">
-            <h2 className="panel-title">Writing DNA Profile</h2>
-            <p className="hint dna-intro">
-              Your Writing DNA is read by Claude before every generation. The more precise you are
-              here, the more the output sounds like you — not like an AI content team. Saved locally
-              and optionally synced to your account.
-            </p>
+                <label>Output Goal</label>
+                <input value={outputGoal} onChange={(e: any) => setOutputGoal(e.target.value)} placeholder="investigative article, explainer, op-ed..." />
 
-            <div className="dna-grid">
-              <div className="dna-field">
-                <label>Signature Phrases</label>
-                <input
-                  value={dnaForm.phrases}
-                  onChange={(e: any) => updateDNAString('phrases', e.target.value)}
-                  placeholder='e.g. "hắn nhớ lại", "không phải vì", "một mình" — comma separated'
-                />
-              </div>
-              <div className="dna-field">
-                <label>Sentence Rhythm</label>
-                <input
-                  value={dnaForm.rhythm}
-                  onChange={(e: any) => updateDNAString('rhythm', e.target.value)}
-                  placeholder="e.g. Short sentences. Long breath. Then silence."
-                />
-              </div>
-              <div className="dna-field">
-                <label>Paragraph Length</label>
-                <select
-                  value={dnaForm.paragraphLength}
-                  onChange={(e: any) =>
-                    updateDNAParagraphLength(e.target.value as DNAForm['paragraphLength'])
-                  }
-                >
-                  <option value="short">Short — 1–3 sentences</option>
-                  <option value="medium">Medium — 3–5 sentences</option>
-                  <option value="long">Long — 5+ sentences, dense blocks</option>
-                  <option value="mixed">Mixed — varies by section</option>
-                </select>
-              </div>
-              <div className="dna-field">
-                <label>Common Vocabulary</label>
-                <input
-                  value={dnaForm.vocabulary}
-                  onChange={(e: any) => updateDNAString('vocabulary', e.target.value)}
-                  placeholder="e.g. hắn, lữ hành, dã tràng, vô ích — comma separated"
-                />
-              </div>
-              <div className="dna-field">
-                <label>Emotional Register</label>
-                <input
-                  value={dnaForm.emotionalStyle}
-                  onChange={(e: any) => updateDNAString('emotionalStyle', e.target.value)}
-                  placeholder="e.g. Cool detachment with rare moments of intensity. Never melodramatic."
-                />
-              </div>
-              <div className="dna-field">
-                <label>Narrative Approach</label>
-                <input
-                  value={dnaForm.narrativeStyle}
-                  onChange={(e: any) => updateDNAString('narrativeStyle', e.target.value)}
-                  placeholder="e.g. Anecdotal → philosophical. Specific memory → general observation."
-                />
-              </div>
-              <div className="dna-field">
-                <label>Language Mixing</label>
-                <input
-                  value={dnaForm.languageMix}
-                  onChange={(e: any) => updateDNAString('languageMix', e.target.value)}
-                  placeholder="e.g. Vietnamese dominant with English technical terms."
-                />
-              </div>
-              <div className="dna-field">
-                <label>Phrases to Avoid</label>
-                <input
-                  value={dnaForm.avoidances}
-                  onChange={(e: any) => updateDNAString('avoidances', e.target.value)}
-                  placeholder='e.g. "hành trình", "bài học quý giá", "thành công" — comma separated'
-                />
-              </div>
-            </div>
-
-            <button className="btn-primary" onClick={saveDNA}>
-              Save Writing DNA
-            </button>
-
-            <div className="dna-preview">
-              <div className="section-label">Current DNA (raw)</div>
-              <pre className="dna-raw">{JSON.stringify(dnaForm, null, 2)}</pre>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ════════════════════════════════════════════════════════════════════
-          OWNER TAB
-      ════════════════════════════════════════════════════════════════════ */}
-      {tab === 'owner' && (
-        <div className="owner-layout">
-          <div className="panel owner-panel">
-            <h2 className="panel-title">Owner Panel</h2>
-            <p className="hint">
-              Promo credit management, writing engine status, user administration.
-            </p>
-
-            <label>Owner Admin Secret</label>
-            <input
-              type="password"
-              placeholder="OWNER_ADMIN_SECRET from .env"
-              value={ownerSecret}
-              onChange={(e: any) => setOwnerSecret(e.target.value)}
-            />
-
-            {/* Engine status */}
-            <div className="owner-section">
-              <h3>Writing Engine Status</h3>
-              <div className="engine-card">
-                <div className="engine-row">
-                  <div>
-                    <div className="engine-primary">Claude Sonnet 4.6</div>
-                    <div className="hint">
-                      Primary writing brain — long-form, memoir, editorial, essays, Sinology,
-                      bilingual generation, storytelling.
-                    </div>
-                  </div>
-                  <span className="engine-badge">Active</span>
-                </div>
-                <div className="engine-row" style={{ marginTop: 12 }}>
-                  <div>
-                    <div className="engine-secondary">GPT (optional)</div>
-                    <div className="hint">
-                      Operations brain — research, fact extraction, tagging, analytics. Users bring
-                      their own OpenAI key.
-                    </div>
-                  </div>
-                  <span className="engine-badge engine-badge-optional">Optional</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Create promo */}
-            <div className="owner-section">
-              <h3>Create Promo Code</h3>
-              <div className="two-col">
-                <div>
-                  <label>Plan Name</label>
-                  <input
-                    value={promoPlan}
-                    onChange={(e: any) => setPromoPlan(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label>Max Generations</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={promoLimit}
-                    onChange={(e: any) => setPromoLimit(Number(e.target.value))}
-                  />
-                </div>
-                <div>
-                  <label>Max Users</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={promoUsers}
-                    onChange={(e: any) => setPromoUsers(Number(e.target.value))}
-                  />
-                </div>
-                <div>
-                  <label>Expires (optional)</label>
-                  <input
-                    type="datetime-local"
-                    value={promoExpires}
-                    onChange={(e: any) => setPromoExpires(e.target.value)}
-                  />
-                </div>
-              </div>
-              <div className="btn-row">
-                <button onClick={createPromo}>Create promo code</button>
-                <button onClick={loadPromos}>Load all promos</button>
-              </div>
-              {createdPromo && (
-                <div className="banner banner-success" style={{ marginTop: 12 }}>
-                  New code: <strong>{createdPromo.code}</strong> · {createdPromo.max_generations}{' '}
-                  generations · {createdPromo.max_users} user(s)
-                </div>
-              )}
-            </div>
-
-            {/* Promo list */}
-            {promoList.length > 0 && (
-              <div className="owner-section">
-                <h3>All Promo Codes ({promoList.length})</h3>
-                <div className="promo-grid">
-                  {promoList.map((p) => (
-                    <div key={p.code} className="promo-card">
-                      <div className="promo-code">{p.code}</div>
-                      <div className="promo-plan">{p.plan_name}</div>
-                      <div className="promo-usage">
-                        {p.used_generations} / {p.max_generations} generations used
-                      </div>
-                      <div className="promo-expiry">
-                        Expires:{' '}
-                        {p.expires_at ? new Date(p.expires_at).toLocaleString() : 'No expiry'}
-                      </div>
-                      <button
-                        className={p.is_active ? 'btn-pause' : 'btn-activate'}
-                        onClick={() => togglePromo(p.code, p.is_active)}
-                      >
-                        {p.is_active ? 'Pause' : 'Activate'}
-                      </button>
-                    </div>
+                <label>Research Depth</label>
+                <div className="depth-selector">
+                  {DEPTHS.map(d => (
+                    <button key={d.id} className={`depth-btn${depth === d.id ? ' active' : ''}`} onClick={() => setDepth(d.id)}>
+                      {d.label}<br /><span style={{ fontSize: 10 }}>{d.desc}</span>
+                    </button>
                   ))}
                 </div>
+
+                <button className="btn-primary" onClick={runResearch} disabled={loading}>
+                  {loading ? 'Researching...' : '◈ Deep Research'}
+                </button>
+              </div>
+
+              {/* Article generator — shows after research */}
+              {hasResearch && (
+                <div className="panel">
+                  <div className="panel-title">Write Article</div>
+
+                  <label>Article Mode</label>
+                  <div className="article-modes">
+                    {ARTICLE_MODES.map(m => (
+                      <button key={m} className={`article-mode-btn${articleMode === m ? ' active' : ''}`} onClick={() => setArticleMode(m)}>
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+
+                  {sections.thesis_options ? (
+                    <>
+                      <label>Select Thesis</label>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                        {sections.thesis_options.map((t: any, i: number) => (
+                          <button
+                            key={i}
+                            className={`thesis-card${selectedThesis === i ? ' selected' : ''}`}
+                            onClick={() => setSelectedThesis(i)}
+                            style={{ textAlign: 'left', width: '100%' }}
+                          >
+                            <div className="thesis-number">Thesis {i + 1}</div>
+                            <div style={{ fontSize: 12, color: 'var(--press)', lineHeight: 1.4 }}>{t.core_argument}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>Run research first to unlock thesis options.</p>
+                  )}
+
+                  <button
+                    className="btn-primary"
+                    onClick={writeArticle}
+                    disabled={writingArticle || selectedThesis === null}
+                    style={{ marginTop: 12 }}
+                  >
+                    {writingArticle ? 'Writing...' : '✏ Write Article'}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Right: Research Output */}
+            <div>
+              {loading && (
+                <div className="stream-status">
+                  <div className="pulse" />
+                  <span className="stream-status-text">{streamPhase || 'Research in progress...'}</span>
+                </div>
+              )}
+
+              {!hasResearch && !loading && (
+                <div className="panel">
+                  <div className="empty-state">
+                    <span className="empty-icon">◈</span>
+                    <p>Enter a topic and run Deep Research.</p>
+                    <p style={{ fontSize: 12 }}>Research plan · Evidence board · Fact check · Multi-view · Thesis options · Article</p>
+                  </div>
+                </div>
+              )}
+
+              {hasResearch && (
+                <>
+                  {/* Section tabs */}
+                  <div className="section-tabs">
+                    {SECTIONS.map(s => (
+                      readySections.includes(s.key) && (
+                        <button
+                          key={s.key}
+                          className={`section-tab ready${activeSection === s.key ? ' active' : ''}`}
+                          onClick={() => setActiveSection(s.key)}
+                        >
+                          {s.label}
+                        </button>
+                      )
+                    ))}
+                    {article && (
+                      <button
+                        className={`section-tab ready${activeSection === 'article' ? ' active' : ''}`}
+                        onClick={() => setActiveSection('article')}
+                      >
+                        ✏ Article
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Section content */}
+                  <div className="panel">
+
+                    {/* Research Plan */}
+                    {activeSection === 'research_plan' && sections.research_plan && (
+                      <div>
+                        <div className="section-header"><span className="section-label">Research Plan</span></div>
+                        <p style={{ fontSize: 14, color: 'var(--press)', marginBottom: 12 }}><strong>Scope:</strong> {sections.research_plan.scope}</p>
+                        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>{sections.research_plan.research_approach}</p>
+                        <div className="section-label" style={{ marginBottom: 8 }}>Key Questions</div>
+                        <div className="key-questions">
+                          {(sections.research_plan.key_questions || []).map((q: string, i: number) => (
+                            <div key={i} className="key-question">{q}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Background */}
+                    {activeSection === 'background' && sections.background && (
+                      <div>
+                        <div className="section-header"><span className="section-label">Background</span></div>
+                        <p style={{ fontSize: 14, color: 'var(--press)', lineHeight: 1.7, marginBottom: 14 }}>{sections.background.summary}</p>
+                        {sections.background.historical_context && (
+                          <><div className="section-label" style={{ marginBottom: 6 }}>Historical Context</div>
+                          <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, marginBottom: 12 }}>{sections.background.historical_context}</p></>
+                        )}
+                        {sections.background.current_status && (
+                          <><div className="section-label" style={{ marginBottom: 6 }}>Current Status</div>
+                          <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>{sections.background.current_status}</p></>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Timeline */}
+                    {activeSection === 'timeline' && sections.timeline && (
+                      <div>
+                        <div className="section-header"><span className="section-label">Timeline</span></div>
+                        <div className="timeline">
+                          {sections.timeline.map((item: any, i: number) => (
+                            <div key={i} className="timeline-item">
+                              <div className="timeline-date">{item.date}</div>
+                              <div>
+                                <div className="timeline-event">{item.event}</div>
+                                {item.significance && <div className="timeline-sig">{item.significance}</div>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Evidence Board */}
+                    {activeSection === 'evidence_board' && sections.evidence_board && (() => {
+                      const eb = sections.evidence_board;
+                      const categories = [
+                        { key: 'confirmed_facts', label: 'Confirmed Facts', badgeClass: 'badge-confirmed' },
+                        { key: 'statistics', label: 'Statistics', badgeClass: 'badge-plausible' },
+                        { key: 'expert_quotes', label: 'Expert Quotes', badgeClass: 'badge-plausible' },
+                        { key: 'contradictions', label: 'Contradictions', badgeClass: 'badge-contradicted' },
+                        { key: 'unknowns', label: 'Unknowns', badgeClass: 'badge-unknown' },
+                        { key: 'needs_verification', label: 'Needs Verification', badgeClass: 'badge-needs-source' },
+                      ];
+                      return (
+                        <div>
+                          <div className="section-header"><span className="section-label">Evidence Board</span></div>
+                          {categories.map(cat => {
+                            const items = eb[cat.key] || [];
+                            if (!items.length) return null;
+                            return (
+                              <div key={cat.key} className="research-section">
+                                <div className="section-header">
+                                  <span className="section-label">{cat.label}</span>
+                                  <span className={`section-badge ${cat.badgeClass}`}>{items.length}</span>
+                                </div>
+                                <div className="evidence-grid">
+                                  {items.map((item: any, i: number) => (
+                                    <div key={i} className="evidence-card">
+                                      <div className="evidence-claim">{item.claim}</div>
+                                      <div className="evidence-meta">
+                                        <div className={`reliability-dot ${reliabilityClass(item.reliability)}`} title={item.reliability} />
+                                        <span className="evidence-source">{item.source}</span>
+                                        {item.date && <span className="evidence-source">· {item.date}</span>}
+                                      </div>
+                                      {item.notes && <div className="evidence-notes">{item.notes}</div>}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+
+                    {/* Fact Check */}
+                    {activeSection === 'fact_check' && sections.fact_check && (
+                      <div>
+                        <div className="section-header"><span className="section-label">Fact Check</span></div>
+                        <div className="fact-check-list">
+                          {sections.fact_check.map((item: any, i: number) => (
+                            <div key={i} className={`fact-check-item ${item.verdict?.replace(/\s+/g, '_')}`}>
+                              <div style={{ flex: 1 }}>
+                                <div className="fact-check-claim">{item.claim}</div>
+                                <div className="fact-check-explanation">{item.explanation}</div>
+                              </div>
+                              <span className={`section-badge ${verdictBadgeClass(item.verdict)}`}>{item.verdict}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Multi-View */}
+                    {activeSection === 'multi_view' && sections.multi_view && (() => {
+                      const mv = sections.multi_view;
+                      return (
+                        <div>
+                          <div className="section-header"><span className="section-label">Multi-View Analysis</span></div>
+                          <div className="view-grid">
+                            {[mv.view_a, mv.view_b, mv.view_c].filter(Boolean).map((v: any, i: number) => (
+                              <div key={i} className="view-card">
+                                <div className="view-label">{v.label || `View ${String.fromCharCode(65 + i)}`}</div>
+                                <div className="view-arg">{v.argument}</div>
+                                {v.evidence && <div className="view-evidence">{v.evidence}</div>}
+                              </div>
+                            ))}
+                          </div>
+                          <div className="special-views" style={{ marginTop: 10 }}>
+                            {mv.counterargument && (
+                              <div className="special-card">
+                                <div className="special-label">Counterargument</div>
+                                <div style={{ fontSize: 13, color: 'var(--press)' }}>{mv.counterargument}</div>
+                              </div>
+                            )}
+                            {mv.devils_advocate && (
+                              <div className="special-card">
+                                <div className="special-label">Devil's Advocate</div>
+                                <div style={{ fontSize: 13, color: 'var(--press)' }}>{mv.devils_advocate}</div>
+                              </div>
+                            )}
+                            {mv.unpopular_angle && (
+                              <div className="special-card">
+                                <div className="special-label">Unpopular Angle</div>
+                                <div style={{ fontSize: 13, color: 'var(--press)' }}>{mv.unpopular_angle}</div>
+                              </div>
+                            )}
+                            {mv.blind_spot && (
+                              <div className="special-card blind-spot">
+                                <div className="special-label">◉ Blind Spot</div>
+                                <div style={{ fontSize: 13, color: 'var(--press)' }}>{mv.blind_spot}</div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Thesis Options */}
+                    {activeSection === 'thesis_options' && sections.thesis_options && (
+                      <div>
+                        <div className="section-header"><span className="section-label">Thesis Options</span></div>
+                        <div className="thesis-grid">
+                          {sections.thesis_options.map((t: any, i: number) => (
+                            <div
+                              key={i}
+                              className={`thesis-card${selectedThesis === i ? ' selected' : ''}`}
+                              onClick={() => setSelectedThesis(i)}
+                            >
+                              <div className="thesis-number">Thesis {i + 1} {selectedThesis === i ? '✓' : ''}</div>
+                              <div className="thesis-arg">{t.core_argument}</div>
+                              <div className="thesis-meta">
+                                <div>
+                                  <div className="thesis-meta-label">Evidence</div>
+                                  <div className="thesis-meta-items">
+                                    {(t.supporting_evidence || []).map((e: string, j: number) => (
+                                      <div key={j} className="thesis-meta-item">· {e}</div>
+                                    ))}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="thesis-meta-label">Weaknesses</div>
+                                  <div className="thesis-meta-items">
+                                    {(t.weaknesses || []).map((w: string, j: number) => (
+                                      <div key={j} className="thesis-meta-item">· {w}</div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 10 }}>Click a thesis to select it, then click Write Article in the left panel.</p>
+                      </div>
+                    )}
+
+                    {/* Source Leads */}
+                    {activeSection === 'source_leads' && sections.source_leads && (
+                      <div>
+                        <div className="section-header"><span className="section-label">Source Leads</span></div>
+                        <div className="leads-grid">
+                          {sections.source_leads.map((lead: any, i: number) => (
+                            <div key={i} className="lead-card">
+                              <div className="lead-type">{lead.type}</div>
+                              <div className="lead-name">{lead.name}</div>
+                              <div className="lead-why">{lead.why}</div>
+                            </div>
+                          ))}
+                        </div>
+                        {sections.related_angles && (
+                          <div style={{ marginTop: 16 }}>
+                            <div className="section-label" style={{ marginBottom: 8 }}>Related Angles</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                              {sections.related_angles.map((a: any, i: number) => (
+                                <div key={i} style={{ background: 'var(--ink3)', borderRadius: 'var(--radius)', padding: '10px 12px' }}>
+                                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--press)', marginBottom: 4 }}>{a.angle}</div>
+                                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>{a.why_interesting} · <em>{a.research_leads}</em></div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Article */}
+                    {activeSection === 'article' && article && (
+                      <div>
+                        <div className="section-header">
+                          <span className="section-label">Article — {articleMode}</span>
+                          <button className="btn-copy" onClick={() => copyText(`${article.title}\n\n${article.subtitle}\n\n${article.body}`)}>Copy</button>
+                        </div>
+                        <div className="article-title">{article.title}</div>
+                        {article.subtitle && <div className="article-subtitle">{article.subtitle}</div>}
+                        <div className="article-body">{article.body}</div>
+                        {article.editors_note && (
+                          <div style={{ marginTop: 16, padding: '10px 14px', background: 'rgba(224,82,82,.08)', border: '1px solid rgba(224,82,82,.2)', borderRadius: 'var(--radius)' }}>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--red)', letterSpacing: '.1em', textTransform: 'uppercase', marginBottom: 4 }}>Editor's Note</div>
+                            <div style={{ fontSize: 13, color: '#e8a0a0' }}>{article.editors_note}</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                  </div>
+                </>
+              )}
+
+              {/* Writing indicator */}
+              {writingArticle && (
+                <div className="stream-status" style={{ marginTop: 12 }}>
+                  <div className="pulse" />
+                  <span className="stream-status-text">Writing article from thesis {selectedThesis !== null ? selectedThesis + 1 : ''}...</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ══ TRENDING RADAR TAB ════════════════════════════════════════════ */}
+        {tab === 'radar' && (
+          <div>
+            <div className="panel" style={{ marginBottom: 16 }}>
+              <div className="panel-title">Trending Radar</div>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+                <div style={{ flex: 1 }}>
+                  <label>Desk</label>
+                  <select value={trendDesk} onChange={(e: any) => setTrendDesk(e.target.value)}>
+                    {['Sports', 'Politics & Society', 'Wellness', 'Travel', 'Sinology'].map(d => <option key={d}>{d}</option>)}
+                  </select>
+                </div>
+                <button className="btn-gold" onClick={fetchTrends} disabled={loadingTrends} style={{ marginBottom: 1 }}>
+                  {loadingTrends ? 'Scanning...' : '◉ Scan Trends'}
+                </button>
+              </div>
+            </div>
+
+            {loadingTrends && (
+              <div className="stream-status">
+                <div className="pulse" />
+                <span className="stream-status-text">Scanning {trendDesk} desk for investigative angles...</span>
+              </div>
+            )}
+
+            {trends.length > 0 && (
+              <div className="trend-grid">
+                {trends.map((t: any, i: number) => (
+                  <div key={i} className="trend-card" onClick={() => loadTrendTopic(t)}>
+                    <div className="trend-title">{t.title}</div>
+                    <div className="trend-why">{t.why_it_matters}</div>
+                    <div className="trend-angle">→ {t.possible_angle}</div>
+                    <div className="trend-badges">
+                      <span className={`trend-badge urgency-${t.urgency}`}>{t.urgency} urgency</span>
+                      <span className="trend-badge">{t.complexity}</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>Click to research →</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {!loadingTrends && trends.length === 0 && (
+              <div className="panel">
+                <div className="empty-state">
+                  <span className="empty-icon">◉</span>
+                  <p>Select a desk and scan for investigative story leads.</p>
+                </div>
               </div>
             )}
           </div>
-        </div>
-      )}
-    </main>
+        )}
+
+      </div>
+    </>
   );
 }
-
