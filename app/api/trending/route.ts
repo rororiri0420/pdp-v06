@@ -9,56 +9,40 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     const { desk, claudeKey } = body;
-
     const apiKey = claudeKey || process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      return Response.json({ error: 'No API key.' }, { status: 400 });
-    }
+    if (!apiKey) return Response.json({ error: 'No API key.' }, { status: 400 });
 
     const targetDesk = DESKS.includes(desk) ? desk : 'Sports';
-
     const claude = new Anthropic({ apiKey });
 
-    const response = await claude.messages.create({
+    // Use streaming to keep connection alive
+    let text = '';
+    const st = claude.messages.stream({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1500,
+      max_tokens: 800,
       messages: [{
         role: 'user',
-        content: `You are the trend radar for Phong Daily Press Insight OS v0.7 — an investigative newsroom.
-
-DESK: ${targetDesk}
-TODAY: ${new Date().toISOString().split('T')[0]}
-
-Generate 5 trending topics for the ${targetDesk} desk worth deep investigative research.
-These should be stories with depth, contradiction, or underreported angles — not obvious headlines.
-
-Output ONLY valid JSON:
-{
-  "desk": "${targetDesk}",
-  "trends": [
-    {
-      "title": "story title",
-      "why_it_matters": "2-3 sentences on significance and depth",
-      "possible_angle": "the non-obvious investigative angle",
-      "research_leads": "where to look, who to talk to, what data to find",
-      "urgency": "high|medium|low",
-      "complexity": "simple|moderate|complex"
-    }
-  ]
-}`
+        content: `Trend radar for Phong Daily Press v0.7. DESK: ${targetDesk}
+Generate 3 trending investigative story leads. Keep each field to 1 sentence.
+Output ONLY valid JSON, no markdown:
+{"desk":"${targetDesk}","trends":[{"title":"","why_it_matters":"","possible_angle":"","urgency":"high"},{"title":"","why_it_matters":"","possible_angle":"","urgency":"medium"},{"title":"","why_it_matters":"","possible_angle":"","urgency":"low"}]}`
       }]
     });
 
-    const raw = response.content
-      .filter((b: any) => b.type === 'text')
-      .map((b: any) => b.text)
-      .join('');
+    for await (const ch of st) {
+      const c = ch as { type: string; delta?: { type: string; text: string } };
+      if (c.type === 'content_block_delta' && c.delta?.type === 'text_delta') {
+        text += c.delta.text;
+      }
+    }
 
-    const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
-    const data = JSON.parse(cleaned);
-
+    const cleaned = text.replace(/^```json\s*/i,'').replace(/```\s*$/i,'').trim();
+    const a = cleaned.indexOf('{'), b = cleaned.lastIndexOf('}');
+    const json = a !== -1 && b > a ? cleaned.slice(a, b+1) : cleaned;
+    const data = JSON.parse(json);
     return Response.json(data);
-  } catch (err: any) {
-    return Response.json({ error: err?.message || 'Trending radar failed.' }, { status: 500 });
+
+  } catch (err: unknown) {
+    return Response.json({ error: err instanceof Error ? err.message : 'Trending failed.' }, { status: 500 });
   }
 }
