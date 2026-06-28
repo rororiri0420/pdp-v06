@@ -683,7 +683,7 @@ export default function Home() {
               <label>Pitch / Raw Notes / Reporter Material</label>
               <textarea
                 value={notes}
-                onChange={(e: InputEvent) => setNotes(e.target.value)}
+                onChange={(e: TextAreaEvent) => setNotes(e.target.value)}
                 placeholder={`Paste your story idea, raw notes, travel memory, interview fragments, Sinology entry, or anything for the ${activeDesk.name}...`}
               />
               <button className="btn-primary" onClick={generate} disabled={loading}>
