@@ -33,7 +33,7 @@ An **Anti-AI Style Filter** runs before every output and rewrites clichés, moti
 ## Architecture
 
 ```
-Claude Sonnet 4.6   ─── Writing Brain
+Claude Sonnet 4.5   ─── Writing Brain
                         Long-form, memoir, editorial, essays,
                         Sinology, bilingual generation, storytelling
 
@@ -163,7 +163,7 @@ Alternatively, the owner can create promo codes that use the owner's `ANTHROPIC_
 
 ## From v0.5 → v0.6: What Changed
 
-- **Writing engine**: OpenAI → Anthropic Claude Sonnet 4.6
+- **Writing engine**: OpenAI → Anthropic Claude Sonnet 4.5
 - **Writing DNA**: new per-user voice profile system
 - **Author Voice Modes**: Raw / Polished / Editorial with strict prompting
 - **Anti-AI filter**: automatic + logged in output

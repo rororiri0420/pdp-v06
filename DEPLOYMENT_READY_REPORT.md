@@ -118,10 +118,10 @@ Route (app)                              Size     First Load JS
 ## Confirmation Checklist
 
 ### ✅ Anthropic Model Name
-Model: **`claude-sonnet-4-6`** — valid as of June 2026.  
+Model: **`claude-sonnet-4-5`** — valid as of June 2026.  
 Set in: `app/api/generate/route.ts`  
 ```typescript
-model: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6',
+model: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-5',
 ```
 Override via `ANTHROPIC_MODEL` env var.
 

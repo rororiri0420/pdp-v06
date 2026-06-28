@@ -113,8 +113,8 @@ else
 fi
 
 # Model name
-if grep -q "claude-sonnet-4-6" app/api/generate/route.ts; then
-  pass "Anthropic model: claude-sonnet-4-6"
+if grep -q "claude-sonnet-4-5" app/api/generate/route.ts; then
+  pass "Anthropic model: claude-sonnet-4-5"
 else
   fail "Model name not found in generate route"
 fi

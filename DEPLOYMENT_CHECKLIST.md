@@ -55,7 +55,7 @@ Copy `.env.example` to `.env.local` and fill in every value.
 ### Optional
 | Variable | Default |
 |---|---|
-| `ANTHROPIC_MODEL` | `claude-sonnet-4-6` |
+| `ANTHROPIC_MODEL` | `claude-sonnet-4-5` |
 | `OPENAI_API_KEY` | Not required. GPT features disabled without it. |
 
 ### Verify env vars

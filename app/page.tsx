@@ -63,6 +63,19 @@ function getFingerprint(): string {
   return fp;
 }
 
+async function readJsonResponse(res: Response): Promise<any> {
+  const text = await res.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    const preview = text.replace(/\s+/g, ' ').slice(0, 500);
+    throw new Error(
+      `Server returned non-JSON response (${res.status}). ${preview || 'Empty response.'}`
+    );
+  }
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function Home() {
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -391,12 +404,12 @@ export default function Home() {
         }),
       });
 
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data.error || 'Generation failed');
 
       setResult(data as GenerationResult);
 
-      const engine = data.billing?.engine ?? 'claude-sonnet-4-6';
+      const engine = data.billing?.engine ?? 'Claude';
       const promoNote =
         data.billing?.mode === 'owner_promo'
           ? ` · Promo remaining: ${data.billing?.promo_remaining_generations}`
@@ -428,7 +441,7 @@ export default function Home() {
           expires_at: promoExpires ? new Date(promoExpires).toISOString() : null,
         }),
       });
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data.error || 'Failed to create promo');
       setCreatedPromo(data.promo as PromoCode);
       notify(`Promo created: ${data.promo.code}`, 'success');
@@ -443,7 +456,7 @@ export default function Home() {
       const res = await fetch('/api/promo/list', {
         headers: { 'x-owner-secret': ownerSecret },
       });
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data.error || 'Failed to load promos');
       setPromoList(data.promos as PromoCode[]);
     } catch (err: unknown) {
@@ -458,7 +471,7 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json', 'x-owner-secret': ownerSecret },
         body: JSON.stringify({ code, is_active: !isActive }),
       });
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data.error || 'Failed to update promo');
       notify(`${code} ${!isActive ? 'activated' : 'paused'}.`, 'success');
       loadPromos();
@@ -516,8 +529,8 @@ export default function Home() {
                 placeholder="your@email.com"
                 type="email"
                 value={email}
-                onChange={(e: any) => setEmail(e.target.value)}
-                onKeyDown={(e: any) => e.key === 'Enter' && sendMagicLink()}
+                onChange={(e: InputEvent) => setEmail(e.target.value)}
+                onKeyDown={(e: KeyEvent) => e.key === 'Enter' && sendMagicLink()}
               />
               <button className="btn-ghost" onClick={sendMagicLink}>
                 Magic link
@@ -566,7 +579,7 @@ export default function Home() {
                     type="password"
                     placeholder="sk-ant-..."
                     value={claudeKey}
-                    onChange={(e: any) => setClaudeKey(e.target.value)}
+                    onChange={(e: InputEvent) => setClaudeKey(e.target.value)}
                   />
                   <div className="btn-row">
                     <button onClick={saveClaudeKey}>Save on this browser</button>
@@ -580,7 +593,7 @@ export default function Home() {
                   <input
                     placeholder="PDP-ABC123"
                     value={promoCode}
-                    onChange={(e: any) => setPromoCode(e.target.value.toUpperCase())}
+                    onChange={(e: InputEvent) => setPromoCode(e.target.value.toUpperCase())}
                   />
                   <div className="btn-row">
                     <button onClick={savePromo}>Save promo</button>
@@ -644,13 +657,13 @@ export default function Home() {
                   <input
                     placeholder="Desk name"
                     value={newDeskName}
-                    onChange={(e: any) => setNewDeskName(e.target.value)}
-                    onKeyDown={(e: any) => e.key === 'Enter' && addCustomDesk()}
+                    onChange={(e: InputEvent) => setNewDeskName(e.target.value)}
+                    onKeyDown={(e: KeyEvent) => e.key === 'Enter' && addCustomDesk()}
                   />
                   <input
                     placeholder="Short description"
                     value={newDeskDesc}
-                    onChange={(e: any) => setNewDeskDesc(e.target.value)}
+                    onChange={(e: InputEvent) => setNewDeskDesc(e.target.value)}
                   />
                   <button onClick={addCustomDesk}>+ Add</button>
                 </div>
@@ -663,7 +676,7 @@ export default function Home() {
               <div className="two-col">
                 <div>
                   <label>Writing Mode</label>
-                  <select value={writingMode} onChange={(e: any) => setWritingMode(e.target.value)}>
+                  <select value={writingMode} onChange={(e: SelectEvent) => setWritingMode(e.target.value)}>
                     {WRITING_MODES.map((m) => (
                       <option key={m}>{m}</option>
                     ))}
@@ -671,7 +684,7 @@ export default function Home() {
                 </div>
                 <div>
                   <label>Tone</label>
-                  <select value={tone} onChange={(e: any) => setTone(e.target.value)}>
+                  <select value={tone} onChange={(e: SelectEvent) => setTone(e.target.value)}>
                     {TONES.map((t) => (
                       <option key={t}>{t}</option>
                     ))}
@@ -679,11 +692,11 @@ export default function Home() {
                 </div>
               </div>
               <label>Audience</label>
-              <input value={audience} onChange={(e: any) => setAudience(e.target.value)} />
+              <input value={audience} onChange={(e: InputEvent) => setAudience(e.target.value)} />
               <label>Pitch / Raw Notes / Reporter Material</label>
               <textarea
                 value={notes}
-                onChange={(e: any) => setNotes(e.target.value)}
+                onChange={(e: InputEvent) => setNotes(e.target.value)}
                 placeholder={`Paste your story idea, raw notes, travel memory, interview fragments, Sinology entry, or anything for the ${activeDesk.name}...`}
               />
               <button className="btn-primary" onClick={generate} disabled={loading}>
@@ -701,7 +714,7 @@ export default function Home() {
                   <div className="output-actions">
                     <select
                       value={postStatus}
-                      onChange={(e: any) => setPostStatus(e.target.value as WorkflowStatus)}
+                      onChange={(e: SelectEvent) => setPostStatus(e.target.value as WorkflowStatus)}
                     >
                       {WORKFLOW_STAGES.map((s) => (
                         <option key={s}>{s}</option>
@@ -872,13 +885,13 @@ export default function Home() {
             <input
               placeholder="Title or notes..."
               value={libraryFilter.search}
-              onChange={(e: any) => setLibraryFilter((p) => ({ ...p, search: e.target.value }))}
+              onChange={(e: SelectEvent) => setLibraryFilter((p) => ({ ...p, search: e.target.value }))}
             />
 
             <label>Status</label>
             <select
               value={libraryFilter.status}
-              onChange={(e: any) => setLibraryFilter((p) => ({ ...p, status: e.target.value }))}
+              onChange={(e: SelectEvent) => setLibraryFilter((p) => ({ ...p, status: e.target.value }))}
             >
               <option value="">All statuses</option>
               {WORKFLOW_STAGES.map((s) => (
@@ -889,7 +902,7 @@ export default function Home() {
             <label>Desk</label>
             <select
               value={libraryFilter.desk}
-              onChange={(e: any) => setLibraryFilter((p) => ({ ...p, desk: e.target.value }))}
+              onChange={(e: SelectEvent) => setLibraryFilter((p) => ({ ...p, desk: e.target.value }))}
             >
               <option value="">All desks</option>
               {allDesks.map((d) => (
@@ -902,7 +915,7 @@ export default function Home() {
             <label>Folder</label>
             <select
               value={libraryFilter.folder}
-              onChange={(e: any) => setLibraryFilter((p) => ({ ...p, folder: e.target.value }))}
+              onChange={(e: SelectEvent) => setLibraryFilter((p) => ({ ...p, folder: e.target.value }))}
             >
               <option value="">All folders</option>
               {LIBRARY_FOLDERS.map((f) => (
@@ -969,7 +982,7 @@ export default function Home() {
                   <div className="post-detail-actions">
                     <select
                       value={selectedPost.status}
-                      onChange={(e: any) =>
+                      onChange={(e: SelectEvent) =>
                         updatePostStatus(selectedPost.id, e.target.value as WorkflowStatus)
                       }
                     >
@@ -1027,7 +1040,7 @@ export default function Home() {
                 <label>Signature Phrases</label>
                 <input
                   value={dnaForm.phrases}
-                  onChange={(e: any) => updateDNAString('phrases', e.target.value)}
+                  onChange={(e: InputEvent) => updateDNAString('phrases', e.target.value)}
                   placeholder='e.g. "hắn nhớ lại", "không phải vì", "một mình" — comma separated'
                 />
               </div>
@@ -1035,7 +1048,7 @@ export default function Home() {
                 <label>Sentence Rhythm</label>
                 <input
                   value={dnaForm.rhythm}
-                  onChange={(e: any) => updateDNAString('rhythm', e.target.value)}
+                  onChange={(e: InputEvent) => updateDNAString('rhythm', e.target.value)}
                   placeholder="e.g. Short sentences. Long breath. Then silence."
                 />
               </div>
@@ -1043,7 +1056,7 @@ export default function Home() {
                 <label>Paragraph Length</label>
                 <select
                   value={dnaForm.paragraphLength}
-                  onChange={(e: any) =>
+                  onChange={(e: SelectEvent) =>
                     updateDNAParagraphLength(e.target.value as DNAForm['paragraphLength'])
                   }
                 >
@@ -1057,7 +1070,7 @@ export default function Home() {
                 <label>Common Vocabulary</label>
                 <input
                   value={dnaForm.vocabulary}
-                  onChange={(e: any) => updateDNAString('vocabulary', e.target.value)}
+                  onChange={(e: InputEvent) => updateDNAString('vocabulary', e.target.value)}
                   placeholder="e.g. hắn, lữ hành, dã tràng, vô ích — comma separated"
                 />
               </div>
@@ -1065,7 +1078,7 @@ export default function Home() {
                 <label>Emotional Register</label>
                 <input
                   value={dnaForm.emotionalStyle}
-                  onChange={(e: any) => updateDNAString('emotionalStyle', e.target.value)}
+                  onChange={(e: InputEvent) => updateDNAString('emotionalStyle', e.target.value)}
                   placeholder="e.g. Cool detachment with rare moments of intensity. Never melodramatic."
                 />
               </div>
@@ -1073,7 +1086,7 @@ export default function Home() {
                 <label>Narrative Approach</label>
                 <input
                   value={dnaForm.narrativeStyle}
-                  onChange={(e: any) => updateDNAString('narrativeStyle', e.target.value)}
+                  onChange={(e: InputEvent) => updateDNAString('narrativeStyle', e.target.value)}
                   placeholder="e.g. Anecdotal → philosophical. Specific memory → general observation."
                 />
               </div>
@@ -1081,7 +1094,7 @@ export default function Home() {
                 <label>Language Mixing</label>
                 <input
                   value={dnaForm.languageMix}
-                  onChange={(e: any) => updateDNAString('languageMix', e.target.value)}
+                  onChange={(e: InputEvent) => updateDNAString('languageMix', e.target.value)}
                   placeholder="e.g. Vietnamese dominant with English technical terms."
                 />
               </div>
@@ -1089,7 +1102,7 @@ export default function Home() {
                 <label>Phrases to Avoid</label>
                 <input
                   value={dnaForm.avoidances}
-                  onChange={(e: any) => updateDNAString('avoidances', e.target.value)}
+                  onChange={(e: InputEvent) => updateDNAString('avoidances', e.target.value)}
                   placeholder='e.g. "hành trình", "bài học quý giá", "thành công" — comma separated'
                 />
               </div>
@@ -1123,7 +1136,7 @@ export default function Home() {
               type="password"
               placeholder="OWNER_ADMIN_SECRET from .env"
               value={ownerSecret}
-              onChange={(e: any) => setOwnerSecret(e.target.value)}
+              onChange={(e: InputEvent) => setOwnerSecret(e.target.value)}
             />
 
             {/* Engine status */}
@@ -1161,7 +1174,7 @@ export default function Home() {
                   <label>Plan Name</label>
                   <input
                     value={promoPlan}
-                    onChange={(e: any) => setPromoPlan(e.target.value)}
+                    onChange={(e: InputEvent) => setPromoPlan(e.target.value)}
                   />
                 </div>
                 <div>
@@ -1170,7 +1183,7 @@ export default function Home() {
                     type="number"
                     min={1}
                     value={promoLimit}
-                    onChange={(e: any) => setPromoLimit(Number(e.target.value))}
+                    onChange={(e: InputEvent) => setPromoLimit(Number(e.target.value))}
                   />
                 </div>
                 <div>
@@ -1179,7 +1192,7 @@ export default function Home() {
                     type="number"
                     min={1}
                     value={promoUsers}
-                    onChange={(e: any) => setPromoUsers(Number(e.target.value))}
+                    onChange={(e: InputEvent) => setPromoUsers(Number(e.target.value))}
                   />
                 </div>
                 <div>
@@ -1187,7 +1200,7 @@ export default function Home() {
                   <input
                     type="datetime-local"
                     value={promoExpires}
-                    onChange={(e: any) => setPromoExpires(e.target.value)}
+                    onChange={(e: InputEvent) => setPromoExpires(e.target.value)}
                   />
                 </div>
               </div>
@@ -1236,4 +1249,3 @@ export default function Home() {
     </main>
   );
 }
-
