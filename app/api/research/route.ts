@@ -1,353 +1,97 @@
 import Anthropic from '@anthropic-ai/sdk';
 
-// Vercel Hobby: 10s default. maxDuration = 60 requires Pro.
-// Fix: use Anthropic's true SSE streaming so the HTTP connection stays alive
-// while Claude generates. Each token arrives incrementally — no timeout.
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
-// ── Prompts ──────────────────────────────────────────────────────────────────
-function buildResearchPrompt(
-  topic: string,
-  desk: string,
-  language: string,
-  depth: string,
-  outputGoal: string
-): string {
-  const detailLevel = depth === 'deep'
-    ? 'Comprehensive — include 6+ confirmed facts, 4+ statistics, full timeline, 3 thesis options.'
-    : depth === 'standard'
-    ? 'Standard — include 4+ confirmed facts, 2+ statistics, key timeline events, 3 thesis options.'
-    : 'Quick — include 3 confirmed facts, 1-2 statistics, brief timeline, 3 thesis options.';
-
-  return `You are an elite investigative research AI for Phong Daily Press — Insight OS v0.7.
-One-person investigative newsroom. Depth, evidence, sharp original insight.
-
-TOPIC: ${topic}
-DESK: ${desk}
-LANGUAGE: ${language}
-DEPTH: ${detailLevel}
-OUTPUT GOAL: ${outputGoal}
-
-RULES:
-- Every claim needs source/date/context. Never invent sources.
-- Confirm vs speculate vs unknown — distinguish clearly.
-- Surface contradictions. Do not hide complexity.
-- No AI voice. No motivational filler. No generic summaries.
-- Vietnamese: culturally natural, not translated English.
-- Flag anything unverified.
-
-Output ONLY valid JSON, no markdown, no preamble, no trailing text:
-{
-  "research_plan": {
-    "topic": "restated precisely",
-    "key_questions": ["3-5 core investigative questions"],
-    "research_approach": "methodology in one sentence",
-    "scope": "in scope / out of scope"
-  },
-  "background": {
-    "summary": "2-3 paragraph factual background",
-    "historical_context": "relevant history",
-    "current_status": "where things stand now"
-  },
-  "timeline": [
-    { "date": "YYYY-MM or YYYY", "event": "what happened", "significance": "why it matters" }
-  ],
-  "evidence_board": {
-    "confirmed_facts": [
-      { "claim": "fact", "source": "source name", "date": "date if known", "reliability": "high|medium|low", "notes": "context" }
-    ],
-    "statistics": [
-      { "claim": "stat", "source": "source", "date": "date", "reliability": "high|medium|low", "notes": "caveats" }
-    ],
-    "expert_quotes": [
-      { "claim": "quote or paraphrase", "source": "who said it", "date": "when", "reliability": "high|medium|low", "notes": "" }
-    ],
-    "contradictions": [
-      { "claim": "the contradiction", "source": "sources involved", "date": "", "reliability": "medium", "notes": "what conflicts" }
-    ],
-    "unknowns": [
-      { "claim": "what we do not know", "source": "", "date": "", "reliability": "low", "notes": "why it matters" }
-    ],
-    "needs_verification": [
-      { "claim": "claim to verify", "source": "origin", "date": "", "reliability": "low", "notes": "how to verify" }
-    ]
-  },
-  "fact_check": [
-    { "claim": "specific claim", "verdict": "Verified|Plausible|Contradicted|Needs source", "explanation": "brief reasoning" }
-  ],
-  "multi_view": {
-    "view_a": { "label": "Mainstream view", "argument": "...", "evidence": "..." },
-    "view_b": { "label": "Critical view", "argument": "...", "evidence": "..." },
-    "view_c": { "label": "Alternative view", "argument": "...", "evidence": "..." },
-    "counterargument": "strongest argument against the most common position",
-    "devils_advocate": "uncomfortable but valid contrary position",
-    "unpopular_angle": "the angle most journalists will not take",
-    "blind_spot": "what everyone is missing in this story — the most important overlooked dimension"
-  },
-  "thesis_options": [
-    {
-      "id": 1,
-      "core_argument": "thesis statement",
-      "supporting_evidence": ["evidence 1", "evidence 2", "evidence 3"],
-      "weaknesses": ["weakness 1", "weakness 2"],
-      "counterarguments": ["counterargument 1", "counterargument 2"]
-    },
-    {
-      "id": 2,
-      "core_argument": "alternative thesis",
-      "supporting_evidence": ["evidence 1", "evidence 2"],
-      "weaknesses": ["weakness 1"],
-      "counterarguments": ["counterargument 1"]
-    },
-    {
-      "id": 3,
-      "core_argument": "contrarian thesis",
-      "supporting_evidence": ["evidence 1", "evidence 2"],
-      "weaknesses": ["weakness 1"],
-      "counterarguments": ["counterargument 1"]
-    }
-  ],
-  "related_angles": [
-    { "angle": "story angle", "why_interesting": "brief reason", "research_leads": "where to look" }
-  ],
-  "source_leads": [
-    { "type": "person|organization|document|database", "name": "name", "why": "what they would know" }
-  ]
-}`;
+function p1(topic: string, desk: string, lang: string, goal: string) {
+  return `Investigative research AI for Phong Daily Press v0.7.\nTOPIC: ${topic}\nDESK: ${desk}\nLANGUAGE: ${lang}\nGOAL: ${goal}\nOutput ONLY valid JSON, no markdown:\n{"research_plan":{"topic":"string","key_questions":["q1","q2","q3"],"research_approach":"string","scope":"string"},"background":{"summary":"string","historical_context":"string","current_status":"string"},"timeline":[{"date":"string","event":"string","significance":"string"}],"evidence_board":{"confirmed_facts":[{"claim":"string","source":"string","date":"string","reliability":"high","notes":"string"}],"statistics":[{"claim":"string","source":"string","date":"string","reliability":"high","notes":"string"}],"contradictions":[{"claim":"string","source":"string","date":"string","reliability":"medium","notes":"string"}],"unknowns":[{"claim":"string","source":"string","date":"string","reliability":"low","notes":"string"}]}}`;
 }
 
-function buildArticlePrompt(
-  topic: string,
-  thesis: string,
-  evidenceBoard: string,
-  mode: string,
-  language: string
-): string {
-  return `You are writing for Phong Daily Press — Insight OS v0.7.
-Investigative newsroom for one person. Human voice. Sharp analysis. No AI clichés.
-
-TOPIC: ${topic}
-THESIS: ${thesis}
-MODE: ${mode}
-LANGUAGE: ${language}
-
-EVIDENCE:
-${evidenceBoard}
-
-RULES:
-- Every paragraph must serve the thesis argument.
-- Cite sources naturally in text (not as footnotes).
-- No generic conclusions. End on specific detail, open question, or implication.
-- No "In conclusion". No "It is important to note". No "tapestry". No "journey".
-- Vietnamese: culturally natural, not translated. Match register to desk.
-- English: direct, specific, no corporate voice.
-
-Output ONLY valid JSON:
-{
-  "title": "article title",
-  "subtitle": "subtitle or lede",
-  "body": "full article — use \\n\\n for paragraph breaks",
-  "word_count": 0,
-  "key_claims": ["3-5 main claims"],
-  "editors_note": "anything to flag before publishing, or empty string"
-}`;
+function p2(topic: string, lang: string, ctx: string) {
+  return `Investigative research AI for Phong Daily Press v0.7.\nTOPIC: ${topic}\nLANGUAGE: ${lang}\nCONTEXT: ${ctx}\nOutput ONLY valid JSON, no markdown:\n{"fact_check":[{"claim":"string","verdict":"Verified","explanation":"string"}],"multi_view":{"view_a":{"label":"Mainstream","argument":"string","evidence":"string"},"view_b":{"label":"Critical","argument":"string","evidence":"string"},"view_c":{"label":"Alternative","argument":"string","evidence":"string"},"counterargument":"string","unpopular_angle":"string","blind_spot":"string"},"thesis_options":[{"id":1,"core_argument":"string","supporting_evidence":["e1","e2"],"weaknesses":["w1"],"counterarguments":["c1"]},{"id":2,"core_argument":"string","supporting_evidence":["e1"],"weaknesses":["w1"],"counterarguments":["c1"]},{"id":3,"core_argument":"string","supporting_evidence":["e1"],"weaknesses":["w1"],"counterarguments":["c1"]}],"source_leads":[{"type":"person","name":"string","why":"string"}]}`;
 }
 
-// ── Helper: safe JSON extraction ──────────────────────────────────────────────
-function extractJSON(raw: string): string {
-  // Strip markdown fences
-  let s = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
-  // Find first { and last } to handle any trailing text
-  const start = s.indexOf('{');
-  const end = s.lastIndexOf('}');
-  if (start !== -1 && end !== -1 && end > start) {
-    s = s.slice(start, end + 1);
-  }
+function pA(topic: string, thesis: string, ev: string, mode: string, lang: string) {
+  return `Writing for Phong Daily Press v0.7. Human voice. No AI clichés.\nTOPIC: ${topic}\nTHESIS: ${thesis}\nMODE: ${mode}\nLANGUAGE: ${lang}\nEVIDENCE: ${ev}\nRules: every paragraph serves thesis. No generic conclusions. Vietnamese: culturally natural.\nOutput ONLY valid JSON:\n{"title":"string","subtitle":"string","body":"full article with \\n\\n paragraph breaks","word_count":0,"key_claims":["c1","c2"],"editors_note":"string"}`;
+}
+
+function xj(raw: string) {
+  let s = raw.replace(/^```json\s*/i,'').replace(/^```\s*/i,'').replace(/```\s*$/i,'').trim();
+  const a = s.indexOf('{'), b = s.lastIndexOf('}');
+  if (a !== -1 && b > a) s = s.slice(a, b+1);
   return s;
 }
 
-// ── Main handler ──────────────────────────────────────────────────────────────
+async function callClaude(claude: Anthropic, prompt: string, tokens: number, tick: (p:number)=>void) {
+  let text = '', n = 0;
+  const est = tokens * 3.5;
+  const st = claude.messages.stream({ model:'claude-sonnet-4-6', max_tokens:tokens, messages:[{role:'user',content:prompt}] });
+  for await (const ch of st) {
+    const c = ch as {type:string;delta?:{type:string;text:string}};
+    if (c.type==='content_block_delta' && c.delta?.type==='text_delta' && c.delta.text) {
+      text += c.delta.text;
+      n += c.delta.text.length;
+      if (n % 250 < c.delta.text.length) tick(Math.min(95, Math.round(n/est*100)));
+    }
+  }
+  return text;
+}
+
 export async function POST(req: Request) {
-  let body: Record<string, unknown>;
-  try {
-    body = await req.json();
-  } catch {
-    return new Response(JSON.stringify({ error: 'Invalid JSON body.' }), {
-      status: 400, headers: { 'Content-Type': 'application/json' },
-    });
-  }
+  let body: Record<string,string>;
+  try { body = await req.json(); }
+  catch { return new Response(JSON.stringify({error:'Invalid body.'}),{status:400,headers:{'Content-Type':'application/json'}}); }
 
-  const { mode, topic, desk, language, outputGoal, depth, thesis, evidenceBoard, articleMode, claudeKey } = body as Record<string, string>;
+  const {mode,topic,desk,language,outputGoal,thesis,evidenceBoard,articleMode,claudeKey} = body;
+  const key = claudeKey || process.env.ANTHROPIC_API_KEY;
+  if (!key) return new Response(JSON.stringify({error:'No API key.'}),{status:400,headers:{'Content-Type':'application/json'}});
+  if (!topic?.trim()) return new Response(JSON.stringify({error:'Topic required.'}),{status:400,headers:{'Content-Type':'application/json'}});
 
-  const apiKey = claudeKey || process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return new Response(JSON.stringify({ error: 'No Anthropic API key. Add your key in the header.' }), {
-      status: 400, headers: { 'Content-Type': 'application/json' },
-    });
-  }
+  const claude = new Anthropic({apiKey:key});
+  const enc = new TextEncoder();
+  const HDR = {'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive','X-Accel-Buffering':'no'};
+  const sse = (o:object) => enc.encode(`data: ${JSON.stringify(o)}\n\n`);
 
-  if (!topic?.trim()) {
-    return new Response(JSON.stringify({ error: 'Topic is required.' }), {
-      status: 400, headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
-  const claude = new Anthropic({ apiKey });
-  const encoder = new TextEncoder();
-
-  function makeSSE(obj: object): Uint8Array {
-    return encoder.encode(`data: ${JSON.stringify(obj)}\n\n`);
-  }
-
-  // ── ARTICLE MODE ────────────────────────────────────────────────────────────
   if (mode === 'article') {
-    const prompt = buildArticlePrompt(
-      topic,
-      thesis || '',
-      evidenceBoard || '',
-      articleMode || 'Editorial',
-      language || 'Vietnamese'
-    );
-
-    const stream = new ReadableStream({
-      async start(controller) {
-        try {
-          // Use true Anthropic streaming to keep connection alive
-          let fullText = '';
-          const anthropicStream = claude.messages.stream({
-            model: 'claude-sonnet-4-6',
-            max_tokens: 3000,
-            messages: [{ role: 'user', content: prompt }],
-          });
-
-          // Send heartbeat while streaming to prevent proxy timeouts
-          for await (const chunk of anthropicStream) {
-            // Type narrowing for stream events
-            const c = chunk as { type: string; delta?: { type: string; text: string } };
-            if (c.type === 'content_block_delta' && c.delta?.type === 'text_delta' && c.delta.text) {
-              fullText += c.delta.text;
-              // Send progress ping every ~500 chars so connection stays alive
-              if (fullText.length % 500 < 10) {
-                controller.enqueue(makeSSE({ type: 'progress', chars: fullText.length }));
-              }
-            }
-          }
-
-          const cleaned = extractJSON(fullText);
-          const data = JSON.parse(cleaned);
-          controller.enqueue(makeSSE({ type: 'article', data }));
-          controller.enqueue(makeSSE({ type: 'done' }));
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : 'Article generation failed.';
-          controller.enqueue(makeSSE({ type: 'error', message: msg }));
-        }
-        controller.close();
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      },
-    });
+    const s = new ReadableStream({async start(ctl){
+      try {
+        ctl.enqueue(sse({type:'progress',pct:5,message:'Writing...'}));
+        const raw = await callClaude(claude, pA(topic,thesis||'',evidenceBoard||'',articleMode||'Editorial',language||'Vietnamese'), 2000, p=>ctl.enqueue(sse({type:'progress',pct:p,message:`Writing ${p}%`})));
+        const data = JSON.parse(xj(raw));
+        ctl.enqueue(sse({type:'article',data}));
+        ctl.enqueue(sse({type:'done'}));
+      } catch(e:unknown){ ctl.enqueue(sse({type:'error',message:e instanceof Error?e.message:'Failed'})); }
+      ctl.close();
+    }});
+    return new Response(s,{headers:HDR});
   }
 
-  // ── DEEP RESEARCH MODE ──────────────────────────────────────────────────────
-  const prompt = buildResearchPrompt(
-    topic,
-    desk || 'Editorial',
-    language || 'Vietnamese',
-    depth || 'standard',
-    outputGoal || 'investigative article'
-  );
-
-  const stream = new ReadableStream({
-    async start(controller) {
-      function send(obj: object) {
-        controller.enqueue(makeSSE(obj));
+  const s = new ReadableStream({async start(ctl){
+    const send = (o:object) => ctl.enqueue(sse(o));
+    try {
+      send({type:'status',message:'Phase 1: Research foundation...'});
+      const r1 = await callClaude(claude, p1(topic,desk||'Editorial',language||'Vietnamese',outputGoal||'investigative article'), 2000, p=>send({type:'progress',pct:Math.round(p*0.45),message:`Phase 1... ${Math.round(p*0.45)}%`}));
+      let ph1: Record<string,unknown> = {};
+      try { ph1 = JSON.parse(xj(r1)); }
+      catch { send({type:'error',message:'Phase 1 failed. Try a more specific topic.'}); ctl.close(); return; }
+      for (const k of ['research_plan','background','timeline','evidence_board']) {
+        if (ph1[k] !== undefined) send({type:'section',section:k,data:ph1[k]});
       }
-
-      try {
-        send({ type: 'status', message: 'Research engine starting...' });
-
-        // TRUE STREAMING — connection stays alive, no timeout
-        let fullText = '';
-        let charCount = 0;
-
-        const anthropicStream = claude.messages.stream({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 4096,
-          messages: [{ role: 'user', content: prompt }],
-        });
-
-        for await (const chunk of anthropicStream) {
-          // Type narrowing for stream events
-          const c = chunk as { type: string; delta?: { type: string; text: string } };
-          if (c.type === 'content_block_delta' && c.delta?.type === 'text_delta' && c.delta.text) {
-            fullText += c.delta.text;
-            charCount += c.delta.text.length;
-
-            // Send progress events so UI shows activity and connection stays alive
-            if (charCount % 300 < c.delta.text.length) {
-              const pct = Math.min(90, Math.round((charCount / 8000) * 100));
-              send({ type: 'progress', pct, message: `Generating research... ${pct}%` });
-            }
-          }
-        }
-
-        // Full response received — now parse and stream sections
-        send({ type: 'status', message: 'Parsing research...' });
-
-        const cleaned = extractJSON(fullText);
-        let parsed: Record<string, unknown>;
-        try {
-          parsed = JSON.parse(cleaned);
-        } catch {
-          send({ type: 'error', message: 'Research returned invalid JSON. Try again with a more specific topic.' });
-          controller.close();
-          return;
-        }
-
-        // Stream sections in the exact order requested:
-        // Research Plan → Evidence Board → Multi-view → Thesis → Source Leads
-        const sectionOrder: string[] = [
-          'research_plan',
-          'background',
-          'timeline',
-          'evidence_board',
-          'fact_check',
-          'multi_view',
-          'thesis_options',
-          'related_angles',
-          'source_leads',
-        ];
-
-        for (const key of sectionOrder) {
-          if (parsed[key] !== undefined) {
-            send({ type: 'section', section: key, data: parsed[key] });
-          }
-        }
-
-        send({ type: 'done', message: 'Research complete. Select a thesis to write the article.' });
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : 'Research failed.';
-        send({ type: 'error', message: msg });
+      send({type:'status',message:'Phase 2: Analysis + thesis...'});
+      const ctx = JSON.stringify({
+        questions: (ph1.research_plan as Record<string,unknown>)?.key_questions || [],
+        facts: ((ph1.evidence_board as Record<string,unknown[]>)?.confirmed_facts||[]).slice(0,3),
+      });
+      const r2 = await callClaude(claude, p2(topic,language||'Vietnamese',ctx), 2000, p=>send({type:'progress',pct:45+Math.round(p*0.45),message:`Phase 2... ${45+Math.round(p*0.45)}%`}));
+      let ph2: Record<string,unknown> = {};
+      try { ph2 = JSON.parse(xj(r2)); }
+      catch { send({type:'error',message:'Phase 2 failed.'}); ctl.close(); return; }
+      for (const k of ['fact_check','multi_view','thesis_options','source_leads']) {
+        if (ph2[k] !== undefined) send({type:'section',section:k,data:ph2[k]});
       }
-
-      controller.close();
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',   // disables nginx buffering on Vercel edge
-    },
-  });
+      send({type:'done',message:'Research complete. Select a thesis to write.'});
+    } catch(e:unknown){ send({type:'error',message:e instanceof Error?e.message:'Research failed.'}); }
+    ctl.close();
+  }});
+  return new Response(s,{headers:HDR});
 }
