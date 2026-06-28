@@ -4,15 +4,15 @@ export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
 function p1(topic: string, desk: string, lang: string, goal: string) {
-  return `Investigative research AI for Phong Daily Press v0.7.\nTOPIC: ${topic}\nDESK: ${desk}\nLANGUAGE: ${lang}\nGOAL: ${goal}\nOutput ONLY valid JSON, no markdown:\n{"research_plan":{"topic":"string","key_questions":["q1","q2","q3"],"research_approach":"string","scope":"string"},"background":{"summary":"string","historical_context":"string","current_status":"string"},"timeline":[{"date":"string","event":"string","significance":"string"}],"evidence_board":{"confirmed_facts":[{"claim":"string","source":"string","date":"string","reliability":"high","notes":"string"}],"statistics":[{"claim":"string","source":"string","date":"string","reliability":"high","notes":"string"}],"contradictions":[{"claim":"string","source":"string","date":"string","reliability":"medium","notes":"string"}],"unknowns":[{"claim":"string","source":"string","date":"string","reliability":"low","notes":"string"}]}}`;
+  return `Investigative research AI for Phong Daily Press v0.7.\nTOPIC: ${topic}\nDESK: ${desk}\nLANGUAGE: ${lang}\nGOAL: ${goal}\nRules: No AI voice. Vietnamese must be natural. Every claim needs source.\nOutput ONLY valid compact JSON, no markdown, no extra text:\n{"research_plan":{"topic":"","key_questions":["","",""],"research_approach":"","scope":""},"background":{"summary":"","historical_context":"","current_status":""},"timeline":[{"date":"","event":"","significance":""}],"evidence_board":{"confirmed_facts":[{"claim":"","source":"","date":"","reliability":"high","notes":""}],"statistics":[{"claim":"","source":"","date":"","reliability":"high","notes":""}],"contradictions":[{"claim":"","source":"","date":"","reliability":"medium","notes":""}],"unknowns":[{"claim":"","source":"","date":"","reliability":"low","notes":""}]}}`;
 }
 
 function p2(topic: string, lang: string, ctx: string) {
-  return `Investigative research AI for Phong Daily Press v0.7.\nTOPIC: ${topic}\nLANGUAGE: ${lang}\nCONTEXT: ${ctx}\nOutput ONLY valid JSON, no markdown:\n{"fact_check":[{"claim":"string","verdict":"Verified","explanation":"string"}],"multi_view":{"view_a":{"label":"Mainstream","argument":"string","evidence":"string"},"view_b":{"label":"Critical","argument":"string","evidence":"string"},"view_c":{"label":"Alternative","argument":"string","evidence":"string"},"counterargument":"string","unpopular_angle":"string","blind_spot":"string"},"thesis_options":[{"id":1,"core_argument":"string","supporting_evidence":["e1","e2"],"weaknesses":["w1"],"counterarguments":["c1"]},{"id":2,"core_argument":"string","supporting_evidence":["e1"],"weaknesses":["w1"],"counterarguments":["c1"]},{"id":3,"core_argument":"string","supporting_evidence":["e1"],"weaknesses":["w1"],"counterarguments":["c1"]}],"source_leads":[{"type":"person","name":"string","why":"string"}]}`;
+  return `Investigative research AI for Phong Daily Press v0.7.\nTOPIC: ${topic}\nLANGUAGE: ${lang}\nCONTEXT: ${ctx}\nOutput ONLY valid compact JSON, no markdown, no extra text:\n{"fact_check":[{"claim":"","verdict":"Verified","explanation":""}],"multi_view":{"view_a":{"label":"Mainstream","argument":"","evidence":""},"view_b":{"label":"Critical","argument":"","evidence":""},"view_c":{"label":"Alternative","argument":"","evidence":""},"counterargument":"","unpopular_angle":"","blind_spot":""},"thesis_options":[{"id":1,"core_argument":"","supporting_evidence":["",""],"weaknesses":[""],"counterarguments":[""]},{"id":2,"core_argument":"","supporting_evidence":[""],"weaknesses":[""],"counterarguments":[""]},{"id":3,"core_argument":"","supporting_evidence":[""],"weaknesses":[""],"counterarguments":[""]}],"source_leads":[{"type":"person","name":"","why":""}]}`;
 }
 
 function pA(topic: string, thesis: string, ev: string, mode: string, lang: string) {
-  return `Writing for Phong Daily Press v0.7. Human voice. No AI clichés.\nTOPIC: ${topic}\nTHESIS: ${thesis}\nMODE: ${mode}\nLANGUAGE: ${lang}\nEVIDENCE: ${ev}\nRules: every paragraph serves thesis. No generic conclusions. Vietnamese: culturally natural.\nOutput ONLY valid JSON:\n{"title":"string","subtitle":"string","body":"full article with \\n\\n paragraph breaks","word_count":0,"key_claims":["c1","c2"],"editors_note":"string"}`;
+  return `Writing for Phong Daily Press v0.7. Human voice. No AI clichés.\nTOPIC: ${topic}\nTHESIS: ${thesis}\nMODE: ${mode}\nLANGUAGE: ${lang}\nEVIDENCE: ${ev}\nRules: every paragraph serves thesis. No generic conclusions. Vietnamese: culturally natural.\nOutput ONLY valid JSON:\n{"title":"","subtitle":"","body":"full article use \\n\\n for paragraphs","word_count":0,"key_claims":["",""],"editors_note":""}`;
 }
 
 function xj(raw: string) {
@@ -31,7 +31,7 @@ async function callClaude(claude: Anthropic, prompt: string, tokens: number, tic
     if (c.type==='content_block_delta' && c.delta?.type==='text_delta' && c.delta.text) {
       text += c.delta.text;
       n += c.delta.text.length;
-      if (n % 250 < c.delta.text.length) tick(Math.min(95, Math.round(n/est*100)));
+      if (n % 200 < c.delta.text.length) tick(Math.min(95, Math.round(n/est*100)));
     }
   }
   return text;
@@ -56,7 +56,7 @@ export async function POST(req: Request) {
     const s = new ReadableStream({async start(ctl){
       try {
         ctl.enqueue(sse({type:'progress',pct:5,message:'Writing...'}));
-        const raw = await callClaude(claude, pA(topic,thesis||'',evidenceBoard||'',articleMode||'Editorial',language||'Vietnamese'), 2000, p=>ctl.enqueue(sse({type:'progress',pct:p,message:`Writing ${p}%`})));
+        const raw = await callClaude(claude, pA(topic,thesis||'',evidenceBoard||'',articleMode||'Editorial',language||'Vietnamese'), 1500, p=>ctl.enqueue(sse({type:'progress',pct:p,message:`Writing ${p}%`})));
         const data = JSON.parse(xj(raw));
         ctl.enqueue(sse({type:'article',data}));
         ctl.enqueue(sse({type:'done'}));
@@ -69,27 +69,37 @@ export async function POST(req: Request) {
   const s = new ReadableStream({async start(ctl){
     const send = (o:object) => ctl.enqueue(sse(o));
     try {
-      send({type:'status',message:'Phase 1: Research foundation...'});
-      const r1 = await callClaude(claude, p1(topic,desk||'Editorial',language||'Vietnamese',outputGoal||'investigative article'), 2000, p=>send({type:'progress',pct:Math.round(p*0.45),message:`Phase 1... ${Math.round(p*0.45)}%`}));
+      send({type:'status',message:'Phase 1: Research...'});
+      const r1 = await callClaude(
+        claude,
+        p1(topic,desk||'Sports',language||'Vietnamese',outputGoal||'investigative article'),
+        800,
+        p=>send({type:'progress',pct:Math.round(p*0.45),message:`Research ${Math.round(p*0.45)}%`})
+      );
       let ph1: Record<string,unknown> = {};
       try { ph1 = JSON.parse(xj(r1)); }
-      catch { send({type:'error',message:'Phase 1 failed. Try a more specific topic.'}); ctl.close(); return; }
+      catch { send({type:'error',message:'Phase 1 failed. Try again.'}); ctl.close(); return; }
       for (const k of ['research_plan','background','timeline','evidence_board']) {
         if (ph1[k] !== undefined) send({type:'section',section:k,data:ph1[k]});
       }
       send({type:'status',message:'Phase 2: Analysis + thesis...'});
       const ctx = JSON.stringify({
-        questions: (ph1.research_plan as Record<string,unknown>)?.key_questions || [],
-        facts: ((ph1.evidence_board as Record<string,unknown[]>)?.confirmed_facts||[]).slice(0,3),
+        q: (ph1.research_plan as Record<string,unknown>)?.key_questions || [],
+        f: ((ph1.evidence_board as Record<string,unknown[]>)?.confirmed_facts||[]).slice(0,2),
       });
-      const r2 = await callClaude(claude, p2(topic,language||'Vietnamese',ctx), 2000, p=>send({type:'progress',pct:45+Math.round(p*0.45),message:`Phase 2... ${45+Math.round(p*0.45)}%`}));
+      const r2 = await callClaude(
+        claude,
+        p2(topic,language||'Vietnamese',ctx),
+        800,
+        p=>send({type:'progress',pct:45+Math.round(p*0.45),message:`Analysis ${45+Math.round(p*0.45)}%`})
+      );
       let ph2: Record<string,unknown> = {};
       try { ph2 = JSON.parse(xj(r2)); }
-      catch { send({type:'error',message:'Phase 2 failed.'}); ctl.close(); return; }
+      catch { send({type:'error',message:'Phase 2 failed. Try again.'}); ctl.close(); return; }
       for (const k of ['fact_check','multi_view','thesis_options','source_leads']) {
         if (ph2[k] !== undefined) send({type:'section',section:k,data:ph2[k]});
       }
-      send({type:'done',message:'Research complete. Select a thesis to write.'});
+      send({type:'done',message:'Done. Select a thesis to write.'});
     } catch(e:unknown){ send({type:'error',message:e instanceof Error?e.message:'Research failed.'}); }
     ctl.close();
   }});
