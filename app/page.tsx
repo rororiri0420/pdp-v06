@@ -885,8 +885,7 @@ export default function Home() {
             <input
               placeholder="Title or notes..."
               value={libraryFilter.search}
-              onChange={(e: SelectEvent) => setLibraryFilter((p) => ({ ...p, search: e.target.value }))}
-            />
+onChange={(e: React.ChangeEvent<HTMLInputElement>) => setLibraryFilter((p) => ({ ...p, search: e.target.value }))}            />
 
             <label>Status</label>
             <select
